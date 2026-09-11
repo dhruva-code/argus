@@ -1,15 +1,14 @@
-"""rename secrets.masked_value -> value_preview (values are shown unmasked)
+"""rename secrets.masked_value -> value_preview (folded into 0001_initial)
 
 Revision ID: 0005_secret_value_preview
 Revises: 0004_m4_repositories_secrets
-Create Date: 2026-09-10 21:40:00.000000
+
+No-op — see 0002_m2_assets.py for why. Now part of 0001_initial.
 """
 
+from __future__ import annotations
+
 from collections.abc import Sequence
-
-import sqlalchemy as sa
-
-from alembic import op
 
 revision: str = "0005_secret_value_preview"
 down_revision: str | None = "0004_m4_repositories_secrets"
@@ -18,20 +17,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "secrets",
-        "masked_value",
-        new_column_name="value_preview",
-        existing_type=sa.String(length=200),
-        existing_nullable=False,
-    )
+    pass
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "secrets",
-        "value_preview",
-        new_column_name="masked_value",
-        existing_type=sa.String(length=200),
-        existing_nullable=False,
-    )
+    pass
