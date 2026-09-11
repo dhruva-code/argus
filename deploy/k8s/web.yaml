@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/argus-platform/web:latest
+          env:
+            - { name: API_PROXY_TARGET, value: "http://gateway:8000" }
+            - { name: NEXT_PUBLIC_API_BASE_URL, valueFrom: { configMapKeyRef: { name: argus-config, key: NEXT_PUBLIC_API_BASE_URL } } }
+          ports: [{ containerPort: 3000 }]
+          readinessProbe:
+            httpGet: { path: /login, port: 3000 }
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: web }
+spec:
+  selector: { app: web }
+  ports: [{ port: 3000 }]

@@ -1,0 +1,43 @@
+# Pinned runtime dependencies for the gateway container.
+#
+# These pins are verified installable+working on the Python versions listed
+# in ../../config/versions.yaml (including 3.14 — newer pydantic/pydantic-core
+# releases ship prebuilt wheels there; older pins in this file's history did
+# not, and failed to build from source on 3.14). If you bump a pin here,
+# re-run `./install.sh --check` (or `pip install -r requirements.txt` inside
+# .venv) on the oldest and newest supported Python before committing.
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.52.4
+sqlalchemy[asyncio]==2.0.52
+asyncpg==0.31.0
+psycopg[binary]==3.3.5
+alembic==1.19.2
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-jose[cryptography]==3.5.0
+passlib[argon2]==1.7.4
+argon2-cffi==25.1.0
+pyotp==2.10.0
+redis==8.1.0
+httpx==0.28.1
+python-multipart==0.0.32
+cryptography==50.0.1
+sse-starlette==3.4.11
+email-validator==2.3.0
+croniter==6.2.4
+# PDF report rendering (app/services/reports.py, lazy-imported).
+fpdf2==2.8.8
+# Optional HashiCorp Vault Transit secret backend (app/core/crypto.py,
+# lazy-imported — the app works without Vault configured).
+hvac==2.4.0
+# /api/metrics (Prometheus) + optional OpenTelemetry auto-instrumentation.
+prometheus_client==0.26.0
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+# dev / test
+pytest==9.1.1
+pytest-asyncio==1.4.0
+aiosqlite==0.22.1
+ruff==0.16.6

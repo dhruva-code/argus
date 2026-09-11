@@ -1,0 +1,31 @@
+# config/system.yaml — hardware guidance, resource thresholds, and the
+# application's own port map. Flat key: value only.
+
+# Hardware guidance (§5). install.sh warns below these but never aborts
+# (use --force to silence the warning entirely).
+min_cpu_cores: 4
+min_ram_gb: 8
+min_disk_gb: 250
+recommended_cpu_cores: 8
+recommended_ram_gb: 16
+recommended_disk_gb: 500
+
+# Disk-usage thresholds (§44), as a percentage of the filesystem holding
+# ARGUS_ROOT (evidence/scan-artifact growth is the usual driver).
+disk_warn_pct: 70
+disk_high_pct: 80
+disk_critical_pct: 90
+disk_pause_pct: 95
+
+# Memory pressure thresholds (§45), percentage of total RAM in use.
+mem_warn_pct: 80
+mem_critical_pct: 92
+
+# Ports the platform binds by default (docker-compose.yml and native run.sh
+# agree with this table — change both together if you customize a port).
+port_web: 3000
+port_gateway: 8000
+port_postgres: 5432
+port_redis: 6379
+port_minio_api: 9000
+port_minio_console: 9001

@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# scripts/generate_sbom.sh — regenerates THIRD_PARTY_LICENSES.md and sbom.json
+# from the actual installed/declared dependency sets. Re-run before every
+# release so these stay accurate rather than hand-maintained and stale.
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_DIR"
+
+OUT_MD="THIRD_PARTY_LICENSES.md"
+OUT_JSON="sbom.json"
+
+PY_JSON="$(mktemp)"
+NODE_JSON="$(mktemp)"
+GO_TXT="$(mktemp)"
+trap 'rm -f "$PY_JSON" "$NODE_JSON" "$GO_TXT"' EXIT
+
+# ── Python (gateway) ─────────────────────────────────────────────────────
+if [[ -x apis/gateway/.venv/bin/python ]]; then
+  apis/gateway/.venv/bin/python - <<'PY' > "$PY_JSON"
+import json
+try:
+    from importlib.metadata import distributions
+except ImportError:
+    from importlib_metadata import distributions
+
+out = []
+for d in distributions():
+    meta = d.metadata
+    name = meta.get("Name") or d.name
+    if not name:
+        continue
+    license_ = meta.get("License-Expression") or meta.get("License") or ""
+    if not license_ or license_ == "UNKNOWN":
+        for c in meta.get_all("Classifier") or []:
+            if c.startswith("License ::"):
+                license_ = c.split("::")[-1].strip()
+                break
+    out.append({
+        "name": name,
+        "version": meta.get("Version") or "",
+        "license": license_ or "unknown (see PyPI project page)",
+        "source": f"https://pypi.org/project/{name}/",
+    })
+out.sort(key=lambda x: x["name"].lower())
+print(json.dumps(out))
+PY
+else
+  echo "[]" > "$PY_JSON"
+fi
+
+# ── Node (web) ────────────────────────────────────────────────────────────
+if [[ -d web/node_modules ]]; then
+  ( cd web && npm ls --all --json --long 2>/dev/null || true ) > "$NODE_JSON.raw"
+  python3 - "$NODE_JSON.raw" > "$NODE_JSON" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    print("[]")
+    raise SystemExit
+
+seen = {}
+
+def walk(node):
+    deps = node.get("dependencies") or {}
+    for name, info in deps.items():
+        version = info.get("version", "")
+        key = (name, version)
+        if key not in seen:
+            seen[key] = {
+                "name": name,
+                "version": version,
+                "license": info.get("license") or "unknown (see npm project page)",
+                "source": f"https://www.npmjs.com/package/{name}",
+            }
+        walk(info)
+
+walk(data)
+out = sorted(seen.values(), key=lambda x: x["name"].lower())
+print(json.dumps(out))
+PY
+else
+  echo "[]" > "$NODE_JSON"
+fi
+
+# ── Go (orchestrator) ────────────────────────────────────────────────────
+if [[ -f orchestrator/go.mod ]] && command -v go >/dev/null 2>&1; then
+  ( cd orchestrator && go list -m all 2>/dev/null || true ) > "$GO_TXT"
+fi
+
+# ── Security tools (from config/tools.yaml — already the source of truth) ──
+TOOLS_MD=""
+if [[ -f config/tools.yaml ]]; then
+  TOOLS_MD="$(python3 - <<'PY'
+import re
+names, urls = [], {}
+with open("config/tools.yaml") as f:
+    cur = None
+    for line in f:
+        m = re.match(r"\s*-\s*name:\s*(\S+)", line)
+        if m:
+            cur = m.group(1)
+            names.append(cur)
+print(",".join(names))
+PY
+)"
+fi
+
+python3 - "$PY_JSON" "$NODE_JSON" "$GO_TXT" "$OUT_MD" "$OUT_JSON" "$TOOLS_MD" <<'PY'
+import json, sys, datetime
+
+py_json, node_json, go_txt, out_md, out_json, tools_csv = sys.argv[1:7]
+py_deps = json.load(open(py_json))
+node_deps = json.load(open(node_json))
+
+go_deps = []
+try:
+    with open(go_txt) as f:
+        lines = [l.strip() for l in f if l.strip()]
+    if lines:
+        # first line is the module itself
+        for line in lines[1:]:
+            parts = line.split()
+            name = parts[0]
+            version = parts[1] if len(parts) > 1 else ""
+            go_deps.append({
+                "name": name, "version": version,
+                "license": "unknown (see module source)",
+                "source": f"https://{name}" if "." in name.split("/")[0] else name,
+            })
+except FileNotFoundError:
+    pass
+
+security_tools = [t for t in tools_csv.split(",") if t]
+
+now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+# ── SBOM (simple custom JSON — not full CycloneDX/SPDX, labeled as such) ──
+sbom = {
+    "format": "argus-simple-sbom-v1",
+    "generated_at": now,
+    "components": {
+        "python": py_deps,
+        "node": node_deps,
+        "go": go_deps,
+        "security_tools": security_tools,
+    },
+}
+with open(out_json, "w") as f:
+    json.dump(sbom, f, indent=2)
+    f.write("\n")
+
+# ── THIRD_PARTY_LICENSES.md ─────────────────────────────────────────────
+def table(rows):
+    out = ["| Package | Version | License | Source |", "|---|---|---|---|"]
+    for r in rows:
+        out.append(f"| {r['name']} | {r['version']} | {r['license']} | {r['source']} |")
+    return "\n".join(out)
+
+md = f"""# Third-Party Licenses
+
+Auto-generated by `scripts/generate_sbom.sh` on {now}. Regenerate before
+every release rather than hand-editing — this file (and `sbom.json`) reflect
+what's actually installed/declared, not a manually-maintained approximation.
+
+Argus itself is licensed under the terms in `LICENSE`. Everything below is a
+third-party dependency; using them here does not change their own license
+terms, and Argus claims no ownership over any of them.
+
+## Security tools (external binaries the orchestrator invokes)
+
+These are **not bundled** — `install.sh` fetches/builds them from their own
+upstream sources (see `config/tools.yaml` for exact install methods), and
+each is licensed and copyrighted by its own authors, independent of Argus.
+
+{chr(10).join(f"- {t}" for t in security_tools) if security_tools else "_(none detected)_"}
+
+## Python (`apis/gateway`)
+
+{table(py_deps) if py_deps else "_(no .venv found — run ./install.sh first, then re-run this script)_"}
+
+## Node.js (`web`)
+
+{table(node_deps) if node_deps else "_(no node_modules found — run ./install.sh first, then re-run this script)_"}
+
+## Go (`orchestrator`)
+
+{table(go_deps) if go_deps else "_(go.mod not found or go unavailable)_"}
+"""
+
+with open(out_md, "w") as f:
+    f.write(md)
+
+print(f"wrote {out_md} ({len(py_deps)} python, {len(node_deps)} node, {len(go_deps)} go, {len(security_tools)} tools)")
+print(f"wrote {out_json}")
+PY

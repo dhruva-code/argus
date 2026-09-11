@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+*.tsbuildinfo
+
+# Go
+orchestrator/bin/
+*.test
+*.out
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+!.env.example
+
+# Data / artifacts
+data/
+pgdata/
+miniodata/
+*.db
+*.sqlite3
+scan-artifacts/
+
+# install.sh / run.sh / doctor.sh runtime state — logs and backups can
+# contain redacted-but-still-sensitive diagnostic detail; runtime/ holds
+# live pid files and scratch space. None of it belongs in version control.
+logs/
+runtime/
+backups/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

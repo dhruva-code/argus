@@ -1,0 +1,87 @@
+# -- Default values for the Argus chart. Override with `-f my-values.yaml`.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ghcr.io/argus-platform
+  tag: latest
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Non-secret configuration → argus-config ConfigMap
+config:
+  ARGUS_ENV: production
+  ARGUS_LOG_LEVEL: info
+  ARGUS_CORS_ORIGINS: "https://argus.example.com"
+  ARGUS_NUCLEI_TEMPLATES_DIR: /home/argus/nuclei-templates
+  ARGUS_NAABU_PORTS: top-1000
+  # one gateway replica runs the scheduler; set "off" on the rest via podEnv
+  ARGUS_SCHEDULER: "on"
+
+# Secrets. Provide `existingSecret` to reference a pre-created Secret instead.
+secrets:
+  existingSecret: ""
+  data:
+    JWT_SECRET: "change-me"
+    SECRET_ENCRYPTION_KEY: "change-me"
+    ORCH_INTERNAL_TOKEN: "change-me"
+    DATABASE_URL: "postgresql+asyncpg://argus:argus@argus-postgres:5432/argus"
+    REDIS_URL: "redis://argus-redis:6379/0"
+    # optional integrations
+    GITHUB_TOKEN: ""
+    ARGUS_AI_API_KEY: ""
+    VAULT_ADDR: ""
+    VAULT_TOKEN: ""
+    VAULT_TRANSIT_KEY: ""
+
+gateway:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+
+orchestrator:
+  replicas: 2
+  concurrency: 4
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 768Mi }
+
+web:
+  replicas: 2
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+ingress:
+  enabled: true
+  className: nginx
+  host: argus.example.com
+  tls:
+    enabled: true
+    secretName: argus-tls
+  annotations: {}
+
+# Bundled dependencies — disable to point at managed services via `secrets.data`.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  storage: 20Gi
+  auth: { user: argus, password: argus, database: argus }
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+
+minio:
+  enabled: true
+  image: minio/minio:latest
+  storage: 50Gi
+  auth: { rootUser: argus, rootPassword: argus-minio }
+
+# Prometheus Operator ServiceMonitor for the gateway /api/metrics endpoint
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}

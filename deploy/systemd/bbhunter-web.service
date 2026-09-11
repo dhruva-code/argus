@@ -1,0 +1,34 @@
+[Unit]
+Description=Argus web frontend (Next.js)
+Documentation=https://github.com/argus-platform/argus
+After=network-online.target bbhunter.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+WorkingDirectory=/opt/argus/web
+EnvironmentFile=/opt/argus/.env
+ExecStart=/opt/argus/web/node_modules/.bin/next start -p 3000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+MemoryMax=1G
+CPUQuota=150%
+TasksMax=256
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/argus/logs /opt/argus/runtime
+ProtectHome=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus-web
+
+[Install]
+WantedBy=multi-user.target

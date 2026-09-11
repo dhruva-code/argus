@@ -1,0 +1,175 @@
+# config/tools.yaml — the security-tool manifest (§11). Single source of
+# truth for scripts/lib/tools.sh's install/health-check logic.
+#
+# Mirrors (and must be kept in sync with):
+#   orchestrator/internal/tools/registry.go  — the orchestrator's own health
+#     checker, which is authoritative for what the running app considers
+#     "installed"/"healthy".
+#   apis/gateway/app/tool_catalog.py         — what the Tool Manager UI shows
+#     before the first health check has run.
+#
+# Format: a flat list of blocks under `tools:`. Each block is read by
+# scripts/lib/tools.sh's tools_yaml_get(name, field) — no nested lists, one
+# `key: value` per line, 4-space indent. Comments and blank lines are ignored.
+#
+# Fields:
+#   name              short id, matches the orchestrator's plugin.Metadata.Name
+#   display_name      human label
+#   required_for      comma-separated recon phases that need this tool
+#   minimum_version   below this, the tool is reported degraded/incompatible
+#   recommended_version  the version this platform is actually tested against
+#   install_method    go | apt | script | binary_archive
+#   go_package        (install_method: go) module path passed to `go install`
+#   apt_package       (install_method: apt) apt package name
+#   script_url        (install_method: script) shell installer to fetch+run
+#   binary_url_template  (install_method: binary_archive) URL with {version}/{os}/{arch}
+#   binary_path       final binary name expected on PATH / in ARGUS_TOOLS_BIN_DIR
+#   version_command   flag(s) passed to the binary to print its version
+#   version_regex     extended regex whose first capture group is the version
+#   optional          true/false — false = a plain healthcheck failure is a
+#                     [FAIL], true = missing is only a [WARN]
+
+tools:
+  - name: subfinder
+    display_name: Subfinder
+    required_for: passive_subdomain_enum
+    minimum_version: 2.6.0
+    recommended_version: 2.16.0
+    install_method: go
+    go_package: github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+    binary_path: subfinder
+    version_command: -version
+    version_regex: [Cc]urrent [Vv]ersion:\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: dnsx
+    display_name: DNSX
+    required_for: merge_resolve_alive
+    minimum_version: 1.2.0
+    recommended_version: 1.3.1
+    install_method: go
+    go_package: github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+    binary_path: dnsx
+    version_command: -version
+    version_regex: [Cc]urrent [Vv]ersion:\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: httpx
+    display_name: HTTPX
+    required_for: merge_resolve_alive,waf_cdn_origin_intel
+    minimum_version: 1.3.0
+    recommended_version: 1.11.0
+    install_method: go
+    go_package: github.com/projectdiscovery/httpx/cmd/httpx@latest
+    binary_path: httpx
+    version_command: -version
+    version_regex: [Cc]urrent [Vv]ersion:\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: katana
+    display_name: Katana
+    required_for: url_endpoint_discovery
+    minimum_version: 1.0.0
+    recommended_version: 1.7.0
+    install_method: go
+    go_package: github.com/projectdiscovery/katana/cmd/katana@latest
+    binary_path: katana
+    version_command: -version
+    version_regex: [Cc]urrent [Vv]ersion:\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: gau
+    display_name: gau (GetAllUrls)
+    required_for: url_endpoint_discovery
+    minimum_version: 2.0.0
+    recommended_version: 2.2.4
+    install_method: go
+    go_package: github.com/lc/gau/v2/cmd/gau@latest
+    binary_path: gau
+    version_command: --version
+    version_regex: [Vv]ersion:?\s*v?([0-9][^[:space:]]*)
+    optional: true
+
+  - name: assetfinder
+    display_name: assetfinder
+    required_for: passive_subdomain_enum
+    minimum_version: ""
+    recommended_version: 0.1.1
+    install_method: go
+    go_package: github.com/tomnomnom/assetfinder@latest
+    binary_path: assetfinder
+    version_command: ""
+    version_regex: ""
+    optional: true
+
+  - name: nuclei
+    display_name: Nuclei
+    required_for: automated_vuln_scan
+    minimum_version: 3.0.0
+    recommended_version: 3.11.1
+    install_method: go
+    go_package: github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+    binary_path: nuclei
+    version_command: -version
+    version_regex: [Cc]urrent [Vv]ersion:\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: naabu
+    display_name: Naabu
+    required_for: port_service_fingerprint
+    minimum_version: 2.1.0
+    recommended_version: 2.6.1
+    install_method: go
+    go_package: github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+    binary_path: naabu
+    version_command: -version
+    version_regex: [Cc]urrent [Vv]ersion:\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: ffuf
+    display_name: ffuf
+    required_for: directory_discovery
+    minimum_version: 2.0.0
+    recommended_version: 2.1.0
+    install_method: go
+    go_package: github.com/ffuf/ffuf/v2@latest
+    binary_path: ffuf
+    version_command: -V
+    version_regex: ffuf [Vv]ersion:?\s*v?([0-9][^[:space:]]*)
+    optional: false
+
+  - name: trufflehog
+    display_name: TruffleHog
+    required_for: js_analysis_secrets,source_code_intel
+    minimum_version: 3.60.0
+    recommended_version: 3.97.4
+    install_method: script
+    script_url: https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh
+    binary_path: trufflehog
+    version_command: --version
+    version_regex: trufflehog\s+v?([0-9][^[:space:]]*)
+    optional: true
+
+  - name: gitleaks
+    display_name: Gitleaks
+    required_for: js_analysis_secrets,source_code_intel
+    minimum_version: 8.0.0
+    recommended_version: 8.30.1
+    install_method: binary_archive
+    binary_url_template: https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_linux_{arch}.tar.gz
+    binary_path: gitleaks
+    version_command: version
+    version_regex: ([0-9]+\.[0-9]+\.[0-9]+)
+    optional: true
+
+  - name: nmap
+    display_name: Nmap
+    required_for: port_service_fingerprint
+    minimum_version: 7.0.0
+    recommended_version: 7.98
+    install_method: apt
+    apt_package: nmap
+    binary_path: nmap
+    version_command: --version
+    version_regex: Nmap [Vv]ersion\s+v?([0-9][^[:space:]]*)
+    optional: false

@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argus
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redis.yaml
+  - minio.yaml
+  - gateway.yaml
+  - orchestrator.yaml
+  - web.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: argus-config
+    literals:
+      - ARGUS_ENV=production
+      - ARGUS_LOG_LEVEL=info
+      - POSTGRES_DB=argus
+      - POSTGRES_USER=argus
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT=http://minio:9000
+      - S3_BUCKET=argus-artifacts
+      - ORCH_GATEWAY_URL=http://gateway:8000
+      - SSRF_BLOCK_METADATA=true
+      - NEXT_PUBLIC_API_BASE_URL=https://argus.example.com
+      - ARGUS_CORS_ORIGINS=https://argus.example.com
+# Create the real Secret out of band; secret.example.yaml is only a template.

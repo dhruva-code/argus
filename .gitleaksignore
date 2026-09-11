@@ -1,0 +1,7 @@
+# Intentional, synthetic secrets used as test fixtures for Argus's own
+# secret-detection engine (apis/gateway / orchestrator/internal/recon secret
+# scanning). These are not real credentials — see the surrounding test file
+# for context. Never add a real secret's fingerprint here; if gitleaks ever
+# flags something outside this list, treat it as real until proven otherwise.
+orchestrator/internal/recon/secrets_test.go:jwt:12
+orchestrator/internal/recon/secrets_test.go:github-pat:10

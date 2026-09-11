@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: orchestrator }
+  template:
+    metadata:
+      labels: { app: orchestrator }
+    spec:
+      containers:
+        - name: orchestrator
+          image: ghcr.io/argus-platform/orchestrator:latest
+          envFrom:
+            - configMapRef: { name: argus-config }
+            - secretRef: { name: argus-secrets }
+          env:
+            - { name: ORCH_WORKER_CONCURRENCY, value: "4" }
+          # Security-tool binaries: bake into a derived image or mount here.
+          volumeMounts:
+            - { name: tools, mountPath: /usr/local/bin }
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 768Mi }
+      volumes:
+        - name: tools
+          emptyDir: {}

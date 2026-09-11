@@ -1,0 +1,138 @@
+{{- define "argus.depSelector" -}}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "argus.fullname" . }}-postgres
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "argus.fullname" . }}-postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "argus.depSelector" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "argus.depSelector" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.postgres.auth.password | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "argus.fullname" . }}-postgres
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "argus.depSelector" (dict "root" . "component" "postgres") | nindent 4 }}
+  ports:
+    - port: 5432
+{{- end }}
+{{- if .Values.redis.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "argus.fullname" . }}-redis
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "argus.depSelector" (dict "root" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "argus.depSelector" (dict "root" . "component" "redis") | nindent 8 }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "argus.fullname" . }}-redis
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "argus.depSelector" (dict "root" . "component" "redis") | nindent 4 }}
+  ports:
+    - port: 6379
+{{- end }}
+{{- if .Values.minio.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "argus.fullname" . }}-minio
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "argus.fullname" . }}-minio
+  replicas: 1
+  selector:
+    matchLabels: {{- include "argus.depSelector" (dict "root" . "component" "minio") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "argus.depSelector" (dict "root" . "component" "minio") | nindent 8 }}
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image }}
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.minio.auth.rootUser | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.minio.auth.rootPassword | quote }}
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.minio.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "argus.fullname" . }}-minio
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "argus.depSelector" (dict "root" . "component" "minio") | nindent 4 }}
+  ports:
+    - name: s3
+      port: 9000
+    - name: console
+      port: 9001
+{{- end }}

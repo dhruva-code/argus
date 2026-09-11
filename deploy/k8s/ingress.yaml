@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argus
+  annotations:
+    # Add your ingress controller + cert-manager annotations here.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off" # keep SSE responsive
+spec:
+  rules:
+    - host: argus.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port: { number: 3000 }
+  tls:
+    - hosts: [argus.example.com]
+      secretName: argus-tls

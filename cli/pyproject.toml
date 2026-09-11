@@ -1,0 +1,12 @@
+[project]
+name = "argus-cli"
+version = "0.1.0"
+description = "Command-line client for the Argus platform"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+argus = "argus.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["argus*"]

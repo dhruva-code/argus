@@ -1,0 +1,149 @@
+{
+  "description": "Shared truth table for the scope engine. Both the Go (orchestrator/internal/scope) and Python (apis/gateway/app/scope) implementations run every case in this file and must produce identical decisions. Keep regexes RE2-compatible so the two regexp engines agree.",
+  "suites": [
+    {
+      "name": "wildcard allow with explicit denies",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "wildcard", "value": "*.example.com" },
+          { "id": "d1", "effect": "deny", "type": "domain", "value": "admin.example.com" },
+          { "id": "d2", "effect": "deny", "type": "subdomain", "value": "staging.example.com" },
+          { "id": "a2", "effect": "allow", "type": "cidr", "value": "203.0.113.0/24" }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "api.example.com" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "a.b.example.com" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "example.com" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "admin.example.com" }, "want": "deny", "want_rule": "d1" },
+        { "target": { "host": "staging.example.com" }, "want": "deny", "want_rule": "d2" },
+        { "target": { "host": "eu.staging.example.com" }, "want": "deny", "want_rule": "d2" },
+        { "target": { "host": "evil.com" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "notexample.com" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "x.example.com.evil.com" }, "want": "deny", "want_rule": null },
+        { "target": { "ip": "203.0.113.10" }, "want": "allow", "want_rule": "a2" },
+        { "target": { "ip": "203.0.113.255" }, "want": "allow", "want_rule": "a2" },
+        { "target": { "ip": "203.0.114.1" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "deny precedence over allow regardless of order",
+      "policy": {
+        "rules": [
+          { "id": "d1", "effect": "deny", "type": "wildcard", "value": "*.internal.example.com" },
+          { "id": "a1", "effect": "allow", "type": "subdomain", "value": "example.com" }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "example.com" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "www.example.com" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "vpn.internal.example.com" }, "want": "deny", "want_rule": "d1" }
+      ]
+    },
+    {
+      "name": "port scoping",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "domain", "value": "app.example.com", "ports": [80, 443] },
+          { "id": "d1", "effect": "deny", "type": "domain", "value": "app.example.com", "ports": [22] }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "app.example.com", "port": 443 }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "app.example.com", "port": 8080 }, "want": "deny", "want_rule": null },
+        { "target": { "host": "app.example.com", "port": 22 }, "want": "deny", "want_rule": "d1" },
+        { "target": { "host": "app.example.com" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "path scoping",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "domain", "value": "example.com", "paths": ["/api/", "/public"] },
+          { "id": "d1", "effect": "deny", "type": "domain", "value": "example.com", "paths": ["/api/admin"] }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "example.com", "path": "/api/users" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "example.com", "path": "/public/index.html" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "example.com", "path": "/internal" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "example.com", "path": "/api/admin/reset" }, "want": "deny", "want_rule": "d1" }
+      ]
+    },
+    {
+      "name": "ipv6 cidr and exact ip",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "cidr", "value": "2001:db8::/32" },
+          { "id": "d1", "effect": "deny", "type": "ip", "value": "2001:db8:0:0:0:0:0:1" }
+        ]
+      },
+      "cases": [
+        { "target": { "ip": "2001:db8::abcd" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "ip": "2001:0db8:0000:0000:0000:0000:0000:0001" }, "want": "deny", "want_rule": "d1" },
+        { "target": { "ip": "2001:db9::1" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "asn scoping",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "asn", "value": "AS13335" }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "cf.example.com", "asn": "13335" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "cf.example.com", "asn": "AS13335" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "cf.example.com", "asn": "AS15169" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "cf.example.com" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "regex matcher (RE2-compatible)",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "regex", "value": "^(dev|stage)[0-9]*\\.example\\.com$" }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "dev.example.com" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "stage7.example.com" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "production.example.com" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "dev.example.com.evil.com" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "url matcher (host+path prefix, scheme-insensitive)",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "url", "value": "https://example.com/api/v2" }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "example.com", "path": "/api/v2/users" }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "example.com", "path": "/api/v1/users" }, "want": "deny", "want_rule": null },
+        { "target": { "host": "other.com", "path": "/api/v2/users" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "empty policy denies everything",
+      "policy": { "rules": [] },
+      "cases": [
+        { "target": { "host": "example.com" }, "want": "deny", "want_rule": null },
+        { "target": { "ip": "203.0.113.1" }, "want": "deny", "want_rule": null }
+      ]
+    },
+    {
+      "name": "case and trailing-dot normalization",
+      "policy": {
+        "rules": [
+          { "id": "a1", "effect": "allow", "type": "subdomain", "value": "Example.COM" }
+        ]
+      },
+      "cases": [
+        { "target": { "host": "API.Example.com." }, "want": "allow", "want_rule": "a1" },
+        { "target": { "host": "api.example.com" }, "want": "allow", "want_rule": "a1" }
+      ]
+    }
+  ]
+}

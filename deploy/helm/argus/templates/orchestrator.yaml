@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "argus.fullname" . }}-orchestrator
+  labels: {{- include "argus.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: orchestrator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: orchestrator
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: orchestrator
+          image: {{ include "argus.image" (dict "Values" .Values "component" "orchestrator") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom: {{- include "argus.envFrom" . | nindent 12 }}
+          env:
+            - name: ORCH_WORKER_CONCURRENCY
+              value: {{ .Values.orchestrator.concurrency | quote }}
+          resources: {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+          securityContext:
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: false

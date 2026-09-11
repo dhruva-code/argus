@@ -1,0 +1,8 @@
+apiVersion: v2
+name: argus
+description: Argus — Attack Surface Management & authorized bug-bounty reconnaissance platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: Argus

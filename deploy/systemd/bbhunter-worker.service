@@ -1,0 +1,40 @@
+[Unit]
+Description=Argus orchestrator (job worker pool)
+Documentation=https://github.com/argus-platform/argus
+After=network-online.target bbhunter.service redis-server.service
+Wants=network-online.target
+BindsTo=bbhunter.service
+
+[Service]
+Type=simple
+User=argus
+Group=argus
+WorkingDirectory=/opt/argus/orchestrator
+EnvironmentFile=/opt/argus/.env
+ExecStart=/opt/argus/orchestrator/bin/orchestrator
+Restart=on-failure
+RestartSec=5
+# The orchestrator's own signal.NotifyContext handles SIGTERM gracefully —
+# it stops claiming new jobs and lets in-flight ones checkpoint themselves.
+# Give that real time before systemd escalates to SIGKILL.
+TimeoutStopSec=25
+KillSignal=SIGTERM
+
+MemoryMax=4G
+CPUQuota=400%
+TasksMax=1024
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/argus/logs /opt/argus/runtime
+ProtectHome=true
+# The orchestrator dials the targets a scan is scoped to — it legitimately
+# needs broad outbound network access, unlike the gateway/scheduler.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=argus-orchestrator
+
+[Install]
+WantedBy=multi-user.target

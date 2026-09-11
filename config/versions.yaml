@@ -1,0 +1,15 @@
+# config/versions.yaml — language/runtime version requirements.
+# Flat key: value only (read by scripts/lib/common.sh's yaml_flat_get).
+# Keep in sync with: apis/gateway/pyproject.toml (requires-python), go.mod,
+# web/package.json.
+
+python_min: 3.11
+node_min: 18.0.0
+# go_min is informational only — the authoritative source is orchestrator/go.mod
+# (scripts/lib/go.sh reads that directly so the two can never drift apart).
+go_min: 1.23.0
+
+# Postgres/Redis server versions this platform is tested against. Older
+# servers may work but are not verified; doctor.sh only warns, never blocks.
+postgres_min: 14
+redis_min: 6.0
