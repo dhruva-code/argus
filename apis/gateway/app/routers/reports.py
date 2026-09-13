@@ -37,9 +37,7 @@ async def project_report(
 ) -> Response:
     project = await _project(session, principal, project_id)
     if fmt not in FORMATS:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, f"format must be one of: {', '.join(FORMATS)}"
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"format must be one of: {', '.join(FORMATS)}")
     body, media, filename = await render_report(session, project, fmt)
     await audit.record(
         session,
@@ -88,10 +86,32 @@ async def project_ai_summary(
     from app.services.ai import analyse, available
 
     findings = (
-        (await session.execute(select(Finding).where(Finding.project_id == project_id)))
-        .scalars()
-        .all()
+        (await session.execute(select(Finding).where(Finding.project_id == project_id))).scalars().all()
     )
-    result = await analyse(project, findings)
-    result["llm_available"] = available()
+    result = await analyse(session, principal.org.id, project, findings)
+    result["llm_available"] = await available(session, principal.org.id)
     return result
+
+
+@router.post("/projects/{project_id}/findings/{finding_id}/ai-analysis")
+async def finding_ai_analysis(
+    project_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Read-only, per-finding AI-assisted analysis: classification,
+    false-positive likelihood, severity reasoning, and remediation
+    guidance. Returns `observed_evidence` (the finding's own scanner data,
+    verbatim), `ai_analysis`, and `ai_recommendation` as separate top-level
+    keys — the AI output never overwrites or is stored back onto the
+    finding's own evidence fields."""
+    principal.require("finding.read")
+    await _project(session, principal, project_id)
+    from app.models import Finding
+    from app.services.ai import analyse_finding
+
+    finding = await session.get(Finding, finding_id)
+    if finding is None or finding.project_id != project_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "finding not found")
+    return await analyse_finding(session, principal.org.id, finding)

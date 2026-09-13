@@ -57,6 +57,26 @@ class EventHub:
 hub = EventHub()
 
 
+def _strip_nul_bytes(value):
+    """Recursively drop embedded NUL (0x00) bytes from strings.
+
+    Postgres text/varchar/json columns cannot store a NUL byte at all — it's
+    a hard Postgres limitation, not something that can be escaped — and
+    asyncpg raises DataError on any INSERT/UPDATE that carries one. Event
+    payloads from the orchestrator can legitimately contain one (e.g.
+    null-byte-truncation probe values used by the injection-testing engine),
+    so scrub every event at the ingestion boundary before any of its fields
+    ever reach a query, regardless of which upsert path consumes them.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "") if "\x00" in value else value
+    if isinstance(value, dict):
+        return {k: _strip_nul_bytes(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_nul_bytes(v) for v in value]
+    return value
+
+
 async def _apply_event(raw: dict) -> None:
     job_id = raw.get("job_id")
     if not job_id:
@@ -134,6 +154,19 @@ async def _apply_event(raw: dict) -> None:
                     etype,
                     data.get("value") or data.get("normalized_url") or data.get("fingerprint") or data.get("param_name"),
                 )
+                # A DB-level failure (e.g. a DataError) leaves this session's
+                # transaction aborted; Postgres refuses every further
+                # statement on it, including the error_count bump below and
+                # the session.commit() at the end of this function — so the
+                # error would silently fail to record too, and the whole
+                # event (job_events row included) would be lost when the
+                # exception propagates out of _apply_event. Roll back first
+                # so the job row can be reloaded on a clean transaction and
+                # the increment actually persists.
+                await session.rollback()
+                job = await session.get(ScanJob, jid)
+                if job is None:
+                    return
                 job.error_count = (job.error_count or 0) + 1
 
         if etype == "result":
@@ -223,6 +256,7 @@ async def run_consumer(stop: asyncio.Event) -> None:
                 raw = json.loads(msg["data"])
             except (ValueError, TypeError):
                 continue
+            raw = _strip_nul_bytes(raw)
             try:
                 await _apply_event(raw)
             except Exception:  # noqa: BLE001

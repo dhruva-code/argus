@@ -1,11 +1,11 @@
 "use client";
 
 import { api } from "@/lib/api";
-import type { Finding, FindingSummary } from "@/lib/types";
+import type { Finding, FindingAiAnalysis, FindingSummary } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
-import { Badge, Card, CardHeader, EmptyState, Select, Spinner } from "./ui";
+import { Badge, Button, Card, CardHeader, EmptyState, Select, Spinner } from "./ui";
 
 const SEV_TONE: Record<string, "danger" | "warn" | "accent" | "neutral"> = {
   critical: "danger",
@@ -197,7 +197,7 @@ export function FindingsPanel({
                     {open === f.id && (
                       <tr className="border-b border-border bg-surface">
                         <td colSpan={7} className="p-3">
-                          <FindingDetail f={f} />
+                          <FindingDetail f={f} projectId={projectId} />
                         </td>
                       </tr>
                     )}
@@ -212,7 +212,7 @@ export function FindingsPanel({
   );
 }
 
-function FindingDetail({ f }: { f: Finding }) {
+function FindingDetail({ f, projectId }: { f: Finding; projectId: string }) {
   return (
     <div className="space-y-2 text-xs">
       {f.description && <p className="text-muted">{f.description}</p>}
@@ -278,6 +278,52 @@ function FindingDetail({ f }: { f: Finding }) {
           ))}
         </div>
       )}
+      <AiFindingAnalysis findingId={f.id} projectId={projectId} />
+    </div>
+  );
+}
+
+function AiFindingAnalysis({ findingId, projectId }: { findingId: string; projectId: string }) {
+  const run = useMutation({
+    mutationFn: () =>
+      api<FindingAiAnalysis>(`/projects/${projectId}/findings/${findingId}/ai-analysis`, {
+        method: "POST",
+      }),
+  });
+
+  if (!run.data) {
+    return (
+      <div className="border-t border-border pt-2">
+        <Button variant="outline" className="h-6 px-2 text-[11px]" disabled={run.isPending} onClick={() => run.mutate()}>
+          {run.isPending ? "Analyzing…" : "AI analysis"}
+        </Button>
+        {run.isError && <p className="mt-1 text-critical">AI analysis failed — try again.</p>}
+      </div>
+    );
+  }
+
+  const { ai_analysis, ai_recommendation } = run.data;
+  return (
+    <div className="space-y-2 border-t border-border pt-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
+        AI analysis <span className="normal-case">({ai_analysis.engine === "llm" ? "LLM" : "heuristic fallback"})</span>
+      </div>
+      <p className="rounded border border-border bg-bg p-2">
+        <span className="text-muted">Classification:</span> {ai_analysis.classification || "—"}
+        {" · "}
+        <span className="text-muted">False-positive likelihood:</span>{" "}
+        {ai_analysis.false_positive_likelihood || "—"}
+      </p>
+      {ai_analysis.severity_reasoning && (
+        <p className="rounded border border-border bg-bg p-2">{ai_analysis.severity_reasoning}</p>
+      )}
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted">AI recommendation</div>
+      <p className="rounded border border-border bg-bg p-2">
+        {ai_recommendation.remediation || "No additional recommendation."}
+      </p>
+      <p className="text-[10px] text-muted">
+        Generated from this finding&apos;s own evidence above — never used to change or replace it.
+      </p>
     </div>
   );
 }

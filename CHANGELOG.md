@@ -1,5 +1,129 @@
 # Changelog
 
+## Unreleased — Wayback URLs, AI analysis, professional PDF reports
+
+### Added
+
+- **Wayback URL discovery.** A new data source alongside `gau`/`katana` in
+  the existing `url_endpoint_discovery` phase (`orchestrator/internal/recon/endpoints.go`):
+  queries the Internet Archive's public CDX API (`web.archive.org/cdx/search/cdx`)
+  for historical URLs under each in-scope root, normalizes and deduplicates
+  them through the same pipeline as every other source (a URL another
+  source already found is never reprocessed), records a Wayback capture
+  timestamp range (`wayback_first_seen`/`wayback_last_seen` on
+  `endpoints`, migration `0010_wayback_urls`), and is scope-filtered before
+  ever being fed to endpoint intelligence, parameter discovery, JS
+  analysis, directory discovery, or injection-point discovery — exactly
+  like every other endpoint source. A CDX API failure is reported as a
+  clear `WARNING` in the job log, never a silent zero. New **Recon →
+  Wayback URLs** project tab (stats: total/new/parameterized/interesting;
+  filters: URL text, domain, extension, status code, parameterized-only,
+  interesting/sensitive-only).
+- **AI & Analysis settings** (`Settings → AI & Analysis`): a per-org
+  enable toggle, provider/model configuration, and an API key stored
+  encrypted at rest (reusing the existing Vault-Transit-or-local-Fernet
+  `app.core.crypto` backend — never plaintext, never returned by any API
+  response, only a masked preview shown in the UI) with a safe
+  test-connection check surfacing Configured / Not Configured / Connection
+  Failed. The platform works identically with AI disabled — analysis falls
+  back to a deterministic heuristic.
+- **AI-assisted per-finding analysis** (`POST
+  /api/projects/{id}/findings/{id}/ai-analysis`, surfaced in the Findings
+  panel): classification, false-positive likelihood, severity reasoning,
+  and remediation guidance for one finding at a time, returned as three
+  explicitly separate keys — `observed_evidence` (the finding's own
+  scanner data, verbatim), `ai_analysis`, `ai_recommendation` — so AI
+  output can never overwrite or be confused with the original evidence.
+  Secrets/tokens/cookies/Authorization headers are redacted from any
+  freeform text before it reaches the provider.
+- **Professional PDF reports** (`app/services/reports.py`, full rewrite of
+  `_render_pdf`): cover page (logo, title, target, assessment date,
+  version, confidentiality label, prepared-by/contact), an
+  auto-generated table of contents (fpdf2's real TOC/outline support, not
+  a hand-rolled one), numbered sections (Executive Summary → Scope →
+  Methodology → Attack Surface → Findings Summary with a severity bar
+  chart → Detailed Findings → Remediation Summary → Appendix), a running
+  header/footer with page numbers, and a full per-finding detail block
+  (ID/severity/confidence/CWE/CVE/CVSS/affected asset/description/evidence/
+  reproduction notes/sanitized request-response/remediation/references/
+  detection source/verification status). Long request/response text wraps
+  character-safely (`WrapMode.CHAR`) instead of overflowing. New
+  `Settings → Reports` page for company name, logo (PNG/JPEG/WebP only —
+  SVG rejected, it can embed scripts — capped at 300KB), report title,
+  author, contact, confidentiality label, and accent color.
+- **PDF generation reliability.** `validate_pdf()` does a best-effort
+  structural sanity check (non-empty, `%PDF-`/`%%EOF` markers, rough page
+  count) after every render — a broken render is now a clear `RuntimeError`
+  instead of a silently corrupt file reaching a client. All text is
+  sanitized through a latin-1-safe transliteration layer before reaching
+  fpdf2's core fonts, so unsupported Unicode (CJK, emoji, smart
+  punctuation) degrades to a safe placeholder instead of crashing report
+  generation — verified with a 60-finding, mixed-Unicode stress test
+  producing a clean 38-page PDF.
+
+### Fixed
+
+- **Injection param-extraction bug**: `orchestrator/internal/recon/pipeline.go`
+  fed the injection-testing/vuln-scan engines through `uniqSorted()`, a
+  helper meant for bare hostnames that truncated every URL at its first
+  `/`, silently discarding 100% of real query parameters before they were
+  ever tested. Fixed by using the already-existing, unused-for-this-purpose
+  `uniqSorted2()` instead.
+- **Two false-positive-prone injection verification methods**: path
+  traversal's "self-reference" check never confirmed the tested parameter
+  had any effect on the response before treating unchanged output as
+  proof (fixed with an inert-parameter control probe,
+  `inject_lfi.go`); time-based SQLi promoted a finding to "verified" from
+  a single timing sample, indistinguishable from ordinary network jitter
+  on a public target (fixed by requiring the delay to reproduce on an
+  independent retry, `inject_sqli.go`).
+- **Gateway crash-and-silent-error-loss on NUL-byte payloads**
+  (`app/services/events.py`): a raw `0x00` byte in any event payload
+  crashed Postgres's INSERT/UPDATE, and the resulting aborted transaction
+  silently also swallowed the job's own `error_count` increment — a real
+  failure was being recorded as nothing at all. Fixed with payload-wide
+  NUL-byte scrubbing at the Redis-consumer ingestion boundary and a
+  rollback-then-reload before the error-count bump.
+- **fpdf2 API deprecation warnings** (`ln=1` throughout the old
+  `_render_pdf`) resolved as part of the full PDF rewrite, which uses the
+  current `new_x`/`new_y` API everywhere.
+- **PDF cover-page layout bug**: `multi_cell()`'s default `new_x=RIGHT`
+  left the text cursor at the right margin after the report title, so the
+  next line (`p['client']`) rendered with ~0 remaining width and crashed
+  with "Not enough horizontal space to render a single character" —
+  fixed by setting `new_x=XPos.LMARGIN` explicitly on every cover-page
+  `multi_cell()` call.
+- **PDF table-of-contents overflow**: every per-finding heading (and every
+  sub-heading inside each finding's detail block — Description, Evidence,
+  Sanitized request, etc.) was registering as its own TOC/outline entry,
+  which both made the TOC useless (hundreds of rows for a 50-finding
+  report) and could overflow its reserved page and crash generation
+  outright. Fixed by giving per-finding headings a distinct
+  `finding_heading()` helper that renders identically but does not
+  register in the table of contents — the TOC now stays a genuine
+  8-section table of contents regardless of finding count.
+
+### Known limitations
+
+- PDF generation runs synchronously in the request path (as MD/CSV/HTML/JSON
+  already did), not as a separate background job — a genuinely large,
+  separate architecture change (new job type, polling UI) that was out of
+  scope for this pass. It has been stress-tested at 60 findings (~38-51
+  pages, well under a second) without issue; a project with an extreme
+  finding count could still make the request slow.
+- The AI settings UI only exposes Anthropic as a live-testable provider —
+  `provider`/`model` are free-text fields for forward compatibility, but
+  `test_connection()` and the analysis calls only implement the Anthropic
+  Messages API today.
+- Report logo storage is a `data:` URI column on `report_settings`
+  (capped at 300KB), not an object-storage (MinIO) upload — this codebase
+  has no MinIO integration wired into the gateway app yet to build on.
+- The unified finding pipeline still maps injection Tier=Likely to a
+  top-level `status: confirmed`/`severity: high` (only the finding's
+  title/tags say "LIKELY") — the new AI per-finding analysis now reads the
+  tier tag directly to avoid over-trusting this, but the underlying
+  finding-severity mapping itself is unchanged from before this pass.
+
 ## 0.9.0-private — Finalization: accounts, notifications, private release prep
 
 ### Added

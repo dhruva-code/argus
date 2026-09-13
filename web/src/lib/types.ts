@@ -70,6 +70,44 @@ export interface TestNotificationResult {
   detail: string;
 }
 
+export interface AiSettings {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  api_key_masked: string;
+  status: "not_configured" | "ok" | "failed";
+  last_test_detail: string;
+  last_test_at: string | null;
+}
+
+export interface FindingAiAnalysis {
+  observed_evidence: Record<string, unknown>;
+  ai_analysis: {
+    engine: string;
+    classification: string;
+    false_positive_likelihood: string;
+    severity_reasoning: string;
+  };
+  ai_recommendation: {
+    remediation: string;
+  };
+}
+
+export interface AiTestResult {
+  success: boolean;
+  detail: string;
+}
+
+export interface ReportSettings {
+  company_name: string;
+  has_logo: boolean;
+  report_title: string;
+  author: string;
+  contact_email: string;
+  confidentiality_label: string;
+  accent_color: string;
+}
+
 export interface Project {
   id: string;
   org_id: string;
@@ -314,6 +352,8 @@ export interface Endpoint {
   sources: string[];
   first_seen: string;
   last_seen: string;
+  wayback_first_seen: string | null;
+  wayback_last_seen: string | null;
 }
 
 export interface EndpointSummary {
@@ -324,6 +364,10 @@ export interface EndpointSummary {
   by_sensitivity: Record<string, number>;
   hosts: number;
   with_params: number;
+  wayback_total: number;
+  wayback_new: number;
+  wayback_parameterized: number;
+  wayback_interesting: number;
 }
 
 export interface AssetGraphNode {

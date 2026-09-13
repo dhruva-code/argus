@@ -216,7 +216,9 @@ class User(Base, TimestampMixin):
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     email_verify_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     email_verify_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    pending_email: Mapped[str | None] = mapped_column(String(320), nullable=True)  # set on change-email until re-verified
+    pending_email: Mapped[str | None] = mapped_column(
+        String(320), nullable=True
+    )  # set on change-email until re-verified
     password_reset_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
@@ -588,6 +590,12 @@ class Endpoint(Base):
     first_seen_scan: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("scan_jobs.id", ondelete="SET NULL"), nullable=True
     )
+    # Wayback Machine CDX capture time range for this URL (distinct from
+    # first_seen/last_seen above, which track when *Argus* discovered the
+    # endpoint, not when the Internet Archive crawled it). Null when the
+    # endpoint was never observed via the wayback source.
+    wayback_first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    wayback_last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # ── Source-code intelligence & secrets (M4 — Phases 8 & 10) ───────────────
@@ -669,9 +677,7 @@ class Secret(Base):
 
 class Port(Base):
     __tablename__ = "ports"
-    __table_args__ = (
-        UniqueConstraint("project_id", "ip", "port", "protocol", name="uq_port"),
-    )
+    __table_args__ = (UniqueConstraint("project_id", "ip", "port", "protocol", name="uq_port"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
@@ -707,9 +713,7 @@ class Port(Base):
 
 class Finding(Base):
     __tablename__ = "findings"
-    __table_args__ = (
-        UniqueConstraint("project_id", "fingerprint", name="uq_finding"),
-    )
+    __table_args__ = (UniqueConstraint("project_id", "fingerprint", name="uq_finding"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
@@ -721,9 +725,7 @@ class Finding(Base):
     severity: Mapped[FindingSeverity] = mapped_column(
         Enum(FindingSeverity), default=FindingSeverity.info, index=True
     )
-    status: Mapped[FindingStatus] = mapped_column(
-        Enum(FindingStatus), default=FindingStatus.open, index=True
-    )
+    status: Mapped[FindingStatus] = mapped_column(Enum(FindingStatus), default=FindingStatus.open, index=True)
     confidence: Mapped[int] = mapped_column(Integer, default=50)
     engine: Mapped[str] = mapped_column(String(40), default="nuclei")
     template_version: Mapped[str] = mapped_column(String(40), default="")
@@ -753,10 +755,16 @@ class Finding(Base):
     # Injection Testing Engine fields (§1-13) — populated when engine="injection-engine";
     # left at their defaults for nuclei/waf-cdn/derived findings.
     parameter: Mapped[str] = mapped_column(String(200), default="")
-    param_location: Mapped[str] = mapped_column(String(20), default="")  # query|body_form|body_json|path|header|cookie|graphql_var
+    param_location: Mapped[str] = mapped_column(
+        String(20), default=""
+    )  # query|body_form|body_json|path|header|cookie|graphql_var
     injection_class: Mapped[str] = mapped_column(String(30), default="", index=True)
-    detection_method: Mapped[str] = mapped_column(String(30), default="")  # error_based|boolean_based|time_based|reflection|oast_callback|canary
-    verification_tier: Mapped[str] = mapped_column(String(20), default="potential", index=True)  # potential|likely|verified
+    detection_method: Mapped[str] = mapped_column(
+        String(30), default=""
+    )  # error_based|boolean_based|time_based|reflection|oast_callback|canary
+    verification_tier: Mapped[str] = mapped_column(
+        String(20), default="potential", index=True
+    )  # potential|likely|verified
     evidence_quality: Mapped[int] = mapped_column(Integer, default=0)
     injection_point_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("injection_points.id", ondelete="SET NULL"), nullable=True
@@ -785,9 +793,7 @@ class InjectionPoint(Base):
 
     __tablename__ = "injection_points"
     __table_args__ = (
-        UniqueConstraint(
-            "project_id", "method", "url", "param_name", "location", name="uq_injection_point"
-        ),
+        UniqueConstraint("project_id", "method", "url", "param_name", "location", name="uq_injection_point"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
@@ -800,14 +806,22 @@ class InjectionPoint(Base):
     url: Mapped[str] = mapped_column(String(2000), nullable=False)
     host: Mapped[str] = mapped_column(String(300), default="", index=True)
     param_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    location: Mapped[str] = mapped_column(String(20), nullable=False)  # query|body_form|body_json|path|header|cookie|graphql_var
-    param_type: Mapped[str] = mapped_column(String(20), default="unknown")  # numeric|string|json|uuid|bool|unknown
-    context: Mapped[str] = mapped_column(String(20), default="")  # html|attribute|javascript|url|css|json|dom_sink
+    location: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # query|body_form|body_json|path|header|cookie|graphql_var
+    param_type: Mapped[str] = mapped_column(
+        String(20), default="unknown"
+    )  # numeric|string|json|uuid|bool|unknown
+    context: Mapped[str] = mapped_column(
+        String(20), default=""
+    )  # html|attribute|javascript|url|css|json|dom_sink
     technology: Mapped[str] = mapped_column(String(300), default="")
     auth_state: Mapped[str] = mapped_column(String(40), default="unauthenticated")
     candidate_classes: Mapped[list] = mapped_column(JSON, default=list)
     tested_classes: Mapped[list] = mapped_column(JSON, default=list)
-    best_result: Mapped[str] = mapped_column(String(20), default="untested")  # untested|none|potential|likely|verified
+    best_result: Mapped[str] = mapped_column(
+        String(20), default="untested"
+    )  # untested|none|potential|likely|verified
     confidence: Mapped[int] = mapped_column(Integer, default=0)
     auth_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("auth_profiles.id", ondelete="SET NULL"), nullable=True
@@ -856,7 +870,9 @@ class AuthProfile(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    kind: Mapped[str] = mapped_column(String(30), nullable=False)  # none|basic|bearer|api_key|cookie|oauth_session
+    kind: Mapped[str] = mapped_column(
+        String(30), nullable=False
+    )  # none|basic|bearer|api_key|cookie|oauth_session
     header_name: Mapped[str] = mapped_column(String(120), default="")
     cookie_name: Mapped[str] = mapped_column(String(120), default="")
     location: Mapped[str] = mapped_column(String(10), default="header")  # header|cookie|query
@@ -918,9 +934,7 @@ _DEFAULT_NOTIFICATION_EVENTS = {
 class NotificationPreference(Base, TimestampMixin):
     __tablename__ = "notification_preferences"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     events: Mapped[dict] = mapped_column(JSON, default=lambda: dict(_DEFAULT_NOTIFICATION_EVENTS))
@@ -935,9 +949,7 @@ class TelegramLink(Base, TimestampMixin):
 
     __tablename__ = "telegram_links"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     pairing_code: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     pairing_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -961,3 +973,48 @@ class NotificationDelivery(Base, TimestampMixin):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str] = mapped_column(String(500), default="")
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ── Settings → AI & Analysis / Reports ────────────────────────────────────
+
+
+class AiSettings(Base, TimestampMixin):
+    """One row per org. `api_key_enc` is Fernet/Vault-Transit ciphertext
+    (app.core.crypto) — the plaintext key is never stored, logged, or
+    returned by any API response; only a masked preview is ever shown."""
+
+    __tablename__ = "ai_settings"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider: Mapped[str] = mapped_column(String(40), default="anthropic")
+    model: Mapped[str] = mapped_column(String(80), default="claude-sonnet-5")
+    api_key_enc: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    last_test_status: Mapped[str] = mapped_column(
+        String(20), default="not_configured"
+    )  # not_configured | ok | failed
+    last_test_detail: Mapped[str] = mapped_column(String(500), default="")
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReportSettings(Base, TimestampMixin):
+    """One row per org — branding/metadata applied to every generated
+    report (PDF cover page, footers, etc). Purely cosmetic; never affects
+    finding data."""
+
+    __tablename__ = "report_settings"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    company_name: Mapped[str] = mapped_column(String(200), default="")
+    # small logo as a data: URI (no object-storage integration wired up in
+    # this build) — capped and content-type-validated at the API boundary.
+    logo_data_uri: Mapped[str | None] = mapped_column(String(350_000), nullable=True)
+    report_title: Mapped[str] = mapped_column(String(200), default="Security Assessment Report")
+    author: Mapped[str] = mapped_column(String(200), default="")
+    contact_email: Mapped[str] = mapped_column(String(300), default="")
+    confidentiality_label: Mapped[str] = mapped_column(String(80), default="Confidential")
+    accent_color: Mapped[str] = mapped_column(String(9), default="#2563eb")  # #rrggbb[aa]

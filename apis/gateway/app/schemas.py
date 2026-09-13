@@ -189,6 +189,61 @@ class TestNotificationResult(BaseModel):
     detail: str
 
 
+# ── Settings → AI & Analysis ─────────────────────────────────────────────
+
+
+class AiSettingsOut(BaseModel):
+    enabled: bool
+    provider: str
+    model: str
+    # Never the real key — "" when unset, else a masked preview like "sk-a****".
+    api_key_masked: str
+    status: str  # not_configured | ok | failed
+    last_test_detail: str
+    last_test_at: datetime | None = None
+
+
+class AiSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    provider: str | None = Field(default=None, max_length=40)
+    model: str | None = Field(default=None, max_length=80)
+    # Provide to set/replace; omit to leave the stored key untouched; pass ""
+    # to clear it. Never echoed back by any endpoint.
+    api_key: str | None = Field(default=None, max_length=500)
+
+
+class AiTestResult(BaseModel):
+    success: bool
+    detail: str
+
+
+# ── Settings → Reports ───────────────────────────────────────────────────
+
+
+class ReportSettingsOut(BaseModel):
+    company_name: str
+    has_logo: bool
+    report_title: str
+    author: str
+    contact_email: str
+    confidentiality_label: str
+    accent_color: str
+
+
+class ReportSettingsUpdate(BaseModel):
+    company_name: str | None = Field(default=None, max_length=200)
+    report_title: str | None = Field(default=None, max_length=200)
+    author: str | None = Field(default=None, max_length=200)
+    contact_email: str | None = Field(default=None, max_length=300)
+    confidentiality_label: str | None = Field(default=None, max_length=80)
+    accent_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    # data: URI (image/png|jpeg|svg+xml;base64,...); pass "" to remove. Field
+    # cap is intentionally above the router's actual _MAX_LOGO_BYTES (300KB)
+    # so an over-the-business-limit-but-not-absurd upload gets the router's
+    # friendly 400 ("logo too large") instead of a generic Pydantic 422.
+    logo_data_uri: str | None = Field(default=None, max_length=350_000)
+
+
 # ── Scope ──────────────────────────────────────────────────────────────────
 
 
@@ -477,6 +532,8 @@ class EndpointOut(ORMModel):
     sources: list[str]
     first_seen: datetime
     last_seen: datetime
+    wayback_first_seen: datetime | None = None
+    wayback_last_seen: datetime | None = None
 
 
 class EndpointSummary(BaseModel):
@@ -487,6 +544,10 @@ class EndpointSummary(BaseModel):
     hosts: int
     with_params: int
     by_sensitivity: dict[str, int] = {}
+    wayback_total: int = 0
+    wayback_new: int = 0
+    wayback_parameterized: int = 0
+    wayback_interesting: int = 0
 
 
 class SecretOut(ORMModel):

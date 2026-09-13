@@ -461,7 +461,7 @@ func Run(
 			res.Findings += runSyntheticFindings(aliveList, level, eng, cb)
 		} else {
 			pctx, cancel := phaseCtx(budget)
-			res.Findings += runVulnScan(pctx, runner, eng, dir, vt, uniqSorted(paramURLs), level, opts, cb)
+			res.Findings += runVulnScan(pctx, runner, eng, dir, vt, uniqSorted2(paramURLs), level, opts, cb)
 			cancel()
 		}
 		cb.Checkpoint(PhaseVulnScan, map[string]any{"findings": res.Findings})
@@ -482,7 +482,7 @@ func Run(
 				BrowserBinary:  opts.BrowserBinary,
 				AuthHeaderName: opts.AuthHeaderName, AuthHeaderValue: opts.AuthHeaderValue,
 			}
-			pts, finds := runInjectionTesting(pctx, eng, guard, uniqSorted(paramURLs), opts, iopts, cb)
+			pts, finds := runInjectionTesting(pctx, eng, guard, uniqSorted2(paramURLs), opts, iopts, cb)
 			res.InjectionPoints += pts
 			res.Findings += finds
 			cancel()

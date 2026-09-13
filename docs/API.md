@@ -55,8 +55,8 @@ compile (bad CIDR, bad regex, unknown matcher).
 | GET | `/projects/{id}/assets/graph` | `project.read` — nodes + edges for the relationship graph |
 | GET | `/projects/{id}/assets/{asset_id}` | `project.read` — one asset with full source attribution |
 | GET | `/projects/{id}/vhosts` | `project.read` — virtual hosts (filters: `classification`, `ip`) — M3 |
-| GET | `/projects/{id}/endpoints` | `project.read` — endpoint inventory (filters: `q`, `method`, `tag`, `host`, `in_scope`, `sensitivity`) — M3/M4; ordered by sensitivity desc |
-| GET | `/projects/{id}/endpoints/summary` | `project.read` — counts by method/tag, host count, `by_sensitivity` — M3/M4 |
+| GET | `/projects/{id}/endpoints` | `project.read` — endpoint inventory (filters: `q`, `method`, `tag`, `host`, `in_scope`, `sensitivity`, `source` e.g. `wayback`, `status_code`, `extension`, `has_params`) — M3/M4; ordered by sensitivity desc. Endpoints found via the Wayback Machine also carry `wayback_first_seen`/`wayback_last_seen` — see [WAYBACK.md](WAYBACK.md). |
+| GET | `/projects/{id}/endpoints/summary` | `project.read` — counts by method/tag, host count, `by_sensitivity`, plus `wayback_total`/`wayback_new`/`wayback_parameterized`/`wayback_interesting` — M3/M4 |
 
 ## Secrets & source (M4)
 
@@ -67,10 +67,14 @@ compile (bad CIDR, bad regex, unknown matcher).
 | PATCH | `/projects/{id}/secrets/{secret_id}` | `finding.modify` — `{"status":"verified\|false_positive\|revoked\|unverified","reason":"…"}`; writes a `secret.status_change` audit record |
 | GET | `/projects/{id}/repositories` | `project.read` — discovered source repos (IaC files, matched terms, stars, push time) |
 | GET | `/projects/{id}/findings?sort=priority\|severity` | `finding.read` — each finding carries `priority_score` (0-100) and `priority_band` from the risk engine; default sort is by priority |
-| GET | `/projects/{id}/report?format=md\|json\|csv\|html\|pdf` | `report.generate` — assessment report; add `&download=true` for a download disposition. Secret *values* are never included. |
+| GET | `/projects/{id}/report?format=md\|json\|csv\|html\|pdf` | `report.generate` — assessment report; add `&download=true` for a download disposition. Secret *values* are never included (type/location/masked preview only); finding request/response evidence is included but redacted (API keys, tokens, cookies, Authorization headers). See [REPORTS.md](REPORTS.md) for the PDF's structure/branding. |
 | GET | `/projects/{id}/exposure-delta?since=<iso8601>` | `project.read` — what appeared / went away since the previous scan (or `since`) |
 | GET | `/projects/{id}/analytics?days=30` | `project.read` — FP rate, mean-time-to-triage, scan cadence, riskiest hosts, noisiest templates |
-| POST | `/projects/{id}/ai-summary` | `finding.read` — read-only AI analysis (LLM when `ARGUS_AI_API_KEY` set, else heuristic) |
+| POST | `/projects/{id}/ai-summary` | `finding.read` — read-only AI analysis across all findings (LLM when configured under Settings → AI & Analysis or `ARGUS_AI_API_KEY`, else heuristic) |
+| POST | `/projects/{id}/findings/{finding_id}/ai-analysis` | `finding.read` — read-only AI analysis of one finding: `{observed_evidence, ai_analysis, ai_recommendation}`. See [AI_ANALYSIS.md](AI_ANALYSIS.md). |
+| GET/PUT | `/settings/ai` | any authenticated (GET) / `settings.modify` (PUT) — AI provider/model/enabled + masked key preview |
+| POST | `/settings/ai/test` | `settings.modify` — test the configured AI connection |
+| GET/PUT | `/settings/reports` | any authenticated (GET) / `settings.modify` (PUT) — PDF report branding (company/logo/title/author/contact/confidentiality/accent color) |
 | GET | `/api/metrics` | any authenticated — Prometheus exposition (request + surface metrics) |
 | POST | `/projects/{id}/scans/delete` | `scan.cancel` (+ `project.write` if `purge_data`) — `{"job_ids":[…],"purge_data":false,"reason":"…"}`; finished scans only, running/queued are `skipped`. Audited (`scan.delete`). |
 | DELETE | `/jobs/{job_id}?purge_data=false` | `scan.cancel` (+ `project.write` if `purge_data`) — delete one finished scan |

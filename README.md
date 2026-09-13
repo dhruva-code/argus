@@ -39,9 +39,11 @@ A `recon.scan` job runs up to twelve phases:
   domain → IP → netblock → ASN graph.
 - **Virtual-host enumeration** — Host-header probing with baseline comparison and
   default / interesting / potential-internal classification.
-- **URL & endpoint discovery** (Katana, gau, robots/sitemap/OpenAPI/GraphQL) with
-  URL normalization, **route templating** (`/users/123` → `/users/{id}`) and
-  structural deduplication.
+- **URL & endpoint discovery** (Katana, gau, the Wayback Machine's CDX
+  archive, robots/sitemap/OpenAPI/GraphQL) with URL normalization, **route
+  templating** (`/users/123` → `/users/{id}`) and structural deduplication —
+  a URL already found by one source is never reprocessed by another. See
+  [docs/WAYBACK.md](docs/WAYBACK.md).
 - **JavaScript analysis & secret extraction** (TruffleHog, Gitleaks + custom
   detectors) — discovered `*.js` is fetched through the guarded HTTP engine,
   scanned for secrets and mined for endpoints, domains and source maps. The full
@@ -68,11 +70,16 @@ A `recon.scan` job runs up to twelve phases:
   LFI / SSTI / SSRF / open-redirect; `dos` templates stay excluded.
 
 Beyond the pipeline: a **unified finding engine** (secrets, sensitive paths and
-dangerously-exposed services become findings too), **assessment reports**
-(MD/JSON/CSV/HTML/PDF, secret values excluded), **exposure-delta** + **scheduled
+dangerously-exposed services become findings too), **professional assessment
+reports** (MD/JSON/CSV/HTML, and a multi-section branded **PDF** — cover page,
+table of contents, severity chart, full per-finding detail, sanitized
+evidence; secret values always excluded — see
+[docs/REPORTS.md](docs/REPORTS.md)), **exposure-delta** + **scheduled
 monitoring** with Slack/webhook/email **notifications**, **data-retention**
 enforcement, **scan-history management**, an interactive **attack-surface graph**,
-**program analytics**, read-only **AI-assisted analysis**, `/api/metrics` for
+**program analytics**, optional **AI-assisted analysis** (project summaries and
+per-finding classification/remediation, configured under Settings → AI &
+Analysis — see [docs/AI_ANALYSIS.md](docs/AI_ANALYSIS.md)), `/api/metrics` for
 Prometheus, a **Helm chart** (`deploy/helm/argus`), and an optional **Vault
 Transit** secret backend.
 
@@ -184,6 +191,9 @@ For local development without rebuilding containers on every change, see
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local dev loop, running tests, code layout |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker Compose, systemd, and Kubernetes deployment |
 | [API.md](docs/API.md) | REST API overview; full schema at `/api/docs` |
+| [WAYBACK.md](docs/WAYBACK.md) | Wayback Machine URL discovery: how it works, scope, limitations |
+| [AI_ANALYSIS.md](docs/AI_ANALYSIS.md) | AI configuration, privacy/redaction behavior, what's sent where |
+| [REPORTS.md](docs/REPORTS.md) | Report formats, PDF structure, branding, redaction |
 | [ROADMAP.md](docs/ROADMAP.md) | Milestone plan M1–M7 |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Branching, review, plugin authoring |
 

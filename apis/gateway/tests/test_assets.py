@@ -221,6 +221,31 @@ async def test_endpoint_dedup_by_normalized_url(db_session):
     assert rows[0].tags == ["api"]
 
 
+async def test_endpoint_wayback_timestamps_track_min_max(db_session):
+    org, p = await _project(db_session)
+    common = {"org_id": org.id, "project_id": p.id, "scan_id": None}
+    base = {
+        "method": "GET",
+        "host": "old.example.com",
+        "path": "/legacy.php",
+        "normalized_url": "old.example.com/legacy.php?id",
+        "sample_url": "https://old.example.com/legacy.php?id=1",
+        "query_keys": ["id"],
+        "params": [{"name": "id", "kind": "int", "in": "query"}],
+        "tags": [],
+        "sources": ["wayback"],
+        "in_scope": True,
+    }
+    for ts in ("2020-06-15T00:00:00Z", "2018-01-01T00:00:00Z", "2022-11-30T00:00:00Z"):
+        await upsert_endpoint(db_session, **common, data={**base, "wayback_observed_at": ts})
+    await db_session.commit()
+    rows = (await db_session.execute(select(Endpoint))).scalars().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.wayback_first_seen.year == 2018
+    assert row.wayback_last_seen.year == 2022
+
+
 # ── M4: secrets & repositories ────────────────────────────────────────────
 
 from app.core.crypto import decrypt  # noqa: E402

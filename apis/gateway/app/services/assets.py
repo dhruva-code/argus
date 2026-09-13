@@ -256,8 +256,12 @@ async def upsert_vhost(
         cls = VHostClass.default
     if row is None:
         row = VHost(
-            org_id=org_id, project_id=project_id, ip=ip, hostname=hostname,
-            first_seen=_now(), first_seen_scan=scan_id,
+            org_id=org_id,
+            project_id=project_id,
+            ip=ip,
+            hostname=hostname,
+            first_seen=_now(),
+            first_seen_scan=scan_id,
         )
         session.add(row)
     row.last_seen = _now()
@@ -361,6 +365,26 @@ async def upsert_endpoint(
     for s in data.get("sources") or []:
         if s not in (row.sources or []):
             row.sources = [*(row.sources or []), s]
+
+    if data.get("wayback_observed_at"):
+        try:
+            wb_ts = datetime.fromisoformat(str(data["wayback_observed_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            wb_ts = None
+        if wb_ts is not None:
+            # SQLite (used in tests) drops tzinfo on round-trip even for a
+            # DateTime(timezone=True) column, unlike Postgres — normalize
+            # both sides to aware UTC before comparing so this works
+            # identically on both backends.
+            def _aware(dt: datetime) -> datetime:
+                return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+            cur_first = row.wayback_first_seen
+            cur_last = row.wayback_last_seen
+            if cur_first is None or wb_ts < _aware(cur_first):
+                row.wayback_first_seen = wb_ts
+            if cur_last is None or wb_ts > _aware(cur_last):
+                row.wayback_last_seen = wb_ts
 
     if row.sensitivity.value in ("high", "critical"):
         from app.services.findings import derive_from_endpoint

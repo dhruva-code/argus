@@ -58,6 +58,38 @@ func TestMakeEndpointDedupKeyAndScope(t *testing.T) {
 	}
 }
 
+func TestMakeEndpointWaybackSource(t *testing.T) {
+	eng, _ := scope.Compile(scope.Policy{Rules: []scope.Rule{
+		{ID: "a1", Effect: scope.Allow, Type: scope.MatchSubdomain, Value: "example.com"},
+	}})
+	ep, ok := makeEndpoint("https://old.example.com/legacy.php?id=1", "GET", eng, "wayback")
+	if !ok || !ep.InScope {
+		t.Fatalf("expected in-scope endpoint, got %+v", ep)
+	}
+	if len(ep.Sources) != 1 || ep.Sources[0] != "wayback" {
+		t.Errorf("expected sources=[wayback], got %v", ep.Sources)
+	}
+	// WaybackObservedAt is set by the caller (runEndpointDiscovery), not by
+	// makeEndpoint itself — confirm it's nil here and the field exists.
+	if ep.WaybackObservedAt != nil {
+		t.Errorf("expected WaybackObservedAt unset from makeEndpoint alone, got %v", ep.WaybackObservedAt)
+	}
+}
+
+func TestWaybackFetchBadRootReturnsClearError(t *testing.T) {
+	// No network stubbing here (waybackFetch always makes a real HTTP call,
+	// same convention as gauFetch's untested reliance on plugin.Runner) —
+	// this just confirms a canceled context surfaces as an error rather than
+	// silently returning zero rows, per the "a failed source must be
+	// reported as failed" requirement.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := waybackFetch(ctx, []string{"example.com"})
+	if err == nil {
+		t.Error("expected an error from a pre-canceled context, got nil")
+	}
+}
+
 func contains(s []string, v string) bool {
 	for _, x := range s {
 		if x == v {

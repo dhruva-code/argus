@@ -1,5 +1,7 @@
 "use client";
 
+import { AiSettingsTab } from "@/components/AiSettingsTab";
+import { ReportSettingsTab } from "@/components/ReportSettingsTab";
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Label, Select, Spinner, Tabs } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { api, clearTokens } from "@/lib/api";
@@ -48,6 +50,8 @@ export default function SettingsPage() {
           { key: "account", label: "Account" },
           { key: "security", label: "Security" },
           { key: "notifications", label: "Notifications" },
+          { key: "ai", label: "AI & Analysis" },
+          { key: "reports", label: "Reports" },
           { key: "system", label: "System" },
         ]}
       />
@@ -60,6 +64,8 @@ export default function SettingsPage() {
         </div>
       )}
       {tab === "notifications" && <NotificationsTab />}
+      {tab === "ai" && <AiSettingsTab />}
+      {tab === "reports" && <ReportSettingsTab />}
       {tab === "system" && <SystemHealthCard />}
     </div>
   );

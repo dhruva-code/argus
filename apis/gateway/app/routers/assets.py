@@ -249,6 +249,10 @@ async def list_endpoints(
     host: str | None = None,
     sensitivity: Sensitivity | None = None,
     in_scope: bool | None = True,
+    source: str | None = None,
+    status_code: int | None = None,
+    extension: str | None = None,
+    has_params: bool | None = None,
     limit: int = Query(default=200, le=2000),
     offset: int = 0,
     principal: Principal = Depends(get_principal),
@@ -269,6 +273,16 @@ async def list_endpoints(
         stmt = stmt.where(Endpoint.sensitivity == sensitivity)
     if in_scope is not None:
         stmt = stmt.where(Endpoint.in_scope.is_(in_scope))
+    if source:
+        stmt = stmt.where(Endpoint.sources.contains([source.lower()]))
+    if status_code is not None:
+        stmt = stmt.where(Endpoint.status_code == status_code)
+    if extension:
+        stmt = stmt.where(Endpoint.path.ilike(f"%.{extension.lstrip('.').lower()}"))
+    if has_params is not None:
+        stmt = stmt.where(func.json_array_length(Endpoint.params) > 0) if has_params else stmt.where(
+            func.json_array_length(Endpoint.params) == 0
+        )
     # sensitive paths first
     rows = (
         (
@@ -298,6 +312,10 @@ async def endpoint_summary(
     by_sens: dict[str, int] = {}
     hosts: set[str] = set()
     with_params = 0
+    wayback_total = 0
+    wayback_new = 0
+    wayback_parameterized = 0
+    wayback_interesting = 0
     for e in rows:
         by_method[e.method] = by_method.get(e.method, 0) + 1
         for t in e.tags or []:
@@ -307,12 +325,26 @@ async def endpoint_summary(
         hosts.add(e.host)
         if e.params:
             with_params += 1
+        if "wayback" in (e.sources or []):
+            wayback_total += 1
+            if (e.sources or []) == ["wayback"]:
+                wayback_new += 1
+            if e.params:
+                wayback_parameterized += 1
+            if e.sensitivity != Sensitivity.none or any(
+                t in (e.tags or []) for t in ("admin", "api", "swagger", "graphql")
+            ):
+                wayback_interesting += 1
     return EndpointSummary(
         total=len(rows),
         in_scope=sum(1 for e in rows if e.in_scope),
         by_method=by_method,
         by_tag=dict(sorted(by_tag.items(), key=lambda kv: -kv[1])),
         by_sensitivity=by_sens,
+        wayback_total=wayback_total,
+        wayback_new=wayback_new,
+        wayback_parameterized=wayback_parameterized,
+        wayback_interesting=wayback_interesting,
         hosts=len(hosts),
         with_params=with_params,
     )

@@ -3,6 +3,7 @@
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
 import { AssetsPanel } from "@/components/AssetsPanel";
 import { EndpointsPanel } from "@/components/EndpointsPanel";
+import { WaybackPanel } from "@/components/WaybackPanel";
 import { FindingsPanel } from "@/components/FindingsPanel";
 import { GraphPanel } from "@/components/GraphPanel";
 import { InfraPanel } from "@/components/InfraPanel";
@@ -72,6 +73,7 @@ export default function ProjectDetail() {
           { key: "graph", label: "Graph" },
           { key: "infra", label: "Infrastructure" },
           { key: "endpoints", label: "Endpoints" },
+          { key: "wayback", label: "Wayback URLs" },
           { key: "injection", label: "Injection Testing" },
           { key: "secrets", label: "Secrets & Source" },
           { key: "findings", label: "Findings" },
@@ -87,6 +89,7 @@ export default function ProjectDetail() {
       {tab === "graph" && <GraphPanel projectId={id} />}
       {tab === "infra" && <InfraPanel projectId={id} />}
       {tab === "endpoints" && <EndpointsPanel projectId={id} />}
+      {tab === "wayback" && <WaybackPanel projectId={id} />}
       {tab === "injection" && (
         <InjectionPanel
           projectId={id}

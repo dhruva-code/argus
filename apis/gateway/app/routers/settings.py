@@ -1,31 +1,41 @@
-"""Account-level Settings → Notifications: email/Telegram preferences,
-Telegram pairing, and test-send (§9, §11-13, §20-22).
+"""Settings: per-user Notifications (email/Telegram preferences, pairing,
+test-send — §9, §11-13, §20-22) and org-level AI & Analysis / Reports
+branding (both gated behind the `settings.modify` permission, org_admin+).
 
-Admin/system-wide settings (email provider config, worker limits, etc.) are
-intentionally NOT here — those are environment/`.env`-driven (§24), not a
-per-user API surface, so an ordinary user can never read or change them.
+Environment/`.env`-driven infra settings (email provider transport,
+worker limits, etc.) are intentionally NOT here — those aren't a runtime
+API surface at all, so no user, however privileged, can change them
+through the app.
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import telegram
+from app.core.crypto import decrypt, encrypt, mask
 from app.core.email import EmailSendError, get_email_provider
 from app.core.security import ensure_aware
 from app.db import get_session
-from app.deps import get_current_user
-from app.models import NotificationPreference, TelegramLink, User
+from app.deps import Principal, get_current_user, get_principal, require_permission
+from app.models import AiSettings, NotificationPreference, ReportSettings, TelegramLink, User
 from app.schemas import (
+    AiSettingsOut,
+    AiSettingsUpdate,
+    AiTestResult,
     NotificationPreferenceOut,
     NotificationPreferenceUpdate,
+    ReportSettingsOut,
+    ReportSettingsUpdate,
     TelegramPairResponse,
     TelegramStatusOut,
     TestNotificationResult,
 )
+from app.services.ai import resolve_config, test_connection
 from app.services.notifications import pairing_expiry
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -112,7 +122,9 @@ async def telegram_pair(
     link.pairing_expires = expires
     await session.commit()
     return TelegramPairResponse(
-        pairing_code=code, deep_link=telegram.deep_link(code), expires_at=expires,
+        pairing_code=code,
+        deep_link=telegram.deep_link(code),
+        expires_at=expires,
         bot_configured=telegram.configured(),
     )
 
@@ -138,7 +150,8 @@ async def test_email(
         return TestNotificationResult(success=False, detail="verify your email address first")
     try:
         get_email_provider().send(
-            user.email, "Argus test notification",
+            user.email,
+            "Argus test notification",
             "This is a test notification from Argus. If you received this, email notifications are working.",
         )
     except EmailSendError as exc:
@@ -160,3 +173,161 @@ async def test_telegram(
     except telegram.TelegramSendError as exc:
         return TestNotificationResult(success=False, detail=str(exc))
     return TestNotificationResult(success=True, detail="sent")
+
+
+# ── Settings → AI & Analysis (org-level, settings.modify) ────────────────
+
+
+async def _ai_settings(session: AsyncSession, org_id: uuid.UUID) -> AiSettings:
+    row = await session.get(AiSettings, org_id)
+    if row is None:
+        row = AiSettings(org_id=org_id)
+        session.add(row)
+        await session.flush()
+    return row
+
+
+def _ai_out(row: AiSettings) -> AiSettingsOut:
+    masked = ""
+    if row.api_key_enc:
+        try:
+            masked = mask(decrypt(row.api_key_enc))
+        except ValueError:
+            masked = "****(unreadable — re-enter the key)"
+    return AiSettingsOut(
+        enabled=row.enabled,
+        provider=row.provider,
+        model=row.model,
+        api_key_masked=masked,
+        status=row.last_test_status,
+        last_test_detail=row.last_test_detail,
+        last_test_at=row.last_test_at,
+    )
+
+
+@router.get("/ai", response_model=AiSettingsOut)
+async def get_ai_settings(
+    principal: Principal = Depends(get_principal), session: AsyncSession = Depends(get_session)
+) -> AiSettingsOut:
+    row = await _ai_settings(session, principal.org.id)
+    await session.commit()
+    return _ai_out(row)
+
+
+@router.put("/ai", response_model=AiSettingsOut)
+async def update_ai_settings(
+    body: AiSettingsUpdate,
+    principal: Principal = Depends(require_permission("settings.modify")),
+    session: AsyncSession = Depends(get_session),
+) -> AiSettingsOut:
+    row = await _ai_settings(session, principal.org.id)
+    if body.enabled is not None:
+        row.enabled = body.enabled
+    if body.provider is not None:
+        row.provider = body.provider
+    if body.model is not None:
+        row.model = body.model
+    if body.api_key is not None:
+        row.api_key_enc = encrypt(body.api_key) if body.api_key else None
+        # a changed (or cleared) key invalidates any previous test result —
+        # the new key hasn't been verified against the provider yet.
+        row.last_test_status = "not_configured"
+        row.last_test_detail = ""
+        row.last_test_at = None
+    await session.commit()
+    return _ai_out(row)
+
+
+@router.post("/ai/test", response_model=AiTestResult)
+async def test_ai_settings(
+    principal: Principal = Depends(require_permission("settings.modify")),
+    session: AsyncSession = Depends(get_session),
+) -> AiTestResult:
+    row = await _ai_settings(session, principal.org.id)
+    cfg = await resolve_config(session, principal.org.id)
+    if not cfg.api_key:
+        row.last_test_status, row.last_test_detail = "not_configured", "no API key configured"
+        await session.commit()
+        return AiTestResult(success=False, detail=row.last_test_detail)
+    ok, detail = await test_connection(cfg)
+    row.last_test_status = "ok" if ok else "failed"
+    row.last_test_detail = detail
+    row.last_test_at = datetime.now(UTC)
+    await session.commit()
+    return AiTestResult(success=ok, detail=detail)
+
+
+# ── Settings → Reports (org-level, settings.modify) ───────────────────────
+
+_ALLOWED_LOGO_TYPES = ("image/png", "image/jpeg", "image/webp")
+_MAX_LOGO_BYTES = 300_000
+
+
+async def _report_settings(session: AsyncSession, org_id: uuid.UUID) -> ReportSettings:
+    row = await session.get(ReportSettings, org_id)
+    if row is None:
+        row = ReportSettings(org_id=org_id)
+        session.add(row)
+        await session.flush()
+    return row
+
+
+def _report_out(row: ReportSettings) -> ReportSettingsOut:
+    return ReportSettingsOut(
+        company_name=row.company_name,
+        has_logo=bool(row.logo_data_uri),
+        report_title=row.report_title,
+        author=row.author,
+        contact_email=row.contact_email,
+        confidentiality_label=row.confidentiality_label,
+        accent_color=row.accent_color,
+    )
+
+
+@router.get("/reports", response_model=ReportSettingsOut)
+async def get_report_settings(
+    principal: Principal = Depends(get_principal), session: AsyncSession = Depends(get_session)
+) -> ReportSettingsOut:
+    row = await _report_settings(session, principal.org.id)
+    await session.commit()
+    return _report_out(row)
+
+
+@router.put("/reports", response_model=ReportSettingsOut)
+async def update_report_settings(
+    body: ReportSettingsUpdate,
+    principal: Principal = Depends(require_permission("settings.modify")),
+    session: AsyncSession = Depends(get_session),
+) -> ReportSettingsOut:
+    row = await _report_settings(session, principal.org.id)
+    if body.company_name is not None:
+        row.company_name = body.company_name
+    if body.report_title is not None:
+        row.report_title = body.report_title
+    if body.author is not None:
+        row.author = body.author
+    if body.contact_email is not None:
+        row.contact_email = body.contact_email
+    if body.confidentiality_label is not None:
+        row.confidentiality_label = body.confidentiality_label
+    if body.accent_color is not None:
+        row.accent_color = body.accent_color
+    if body.logo_data_uri is not None:
+        if body.logo_data_uri == "":
+            row.logo_data_uri = None
+        else:
+            if not body.logo_data_uri.startswith("data:"):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "logo must be a data: URI")
+            header = body.logo_data_uri.split(",", 1)[0]
+            if not any(t in header for t in _ALLOWED_LOGO_TYPES):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"logo must be one of: {', '.join(_ALLOWED_LOGO_TYPES)} (SVG rejected — can embed scripts)",
+                )
+            if len(body.logo_data_uri) > _MAX_LOGO_BYTES:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, f"logo too large — max {_MAX_LOGO_BYTES // 1000}KB"
+                )
+            row.logo_data_uri = body.logo_data_uri
+    await session.commit()
+    return _report_out(row)

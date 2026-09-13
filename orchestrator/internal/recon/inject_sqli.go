@@ -108,12 +108,28 @@ func detectSQLi(ctx context.Context, he *httpengine.Engine, p InjParam, params [
 			continue
 		}
 		if elapsed >= time.Duration(sqliDelaySeconds-1)*time.Second+500*time.Millisecond && elapsed > base.elapsed*3 {
-			// confirm once more to rule out network jitter
+			// A single elevated timing sample is not enough on a public,
+			// heavily-scanned target — normal network/server jitter alone can
+			// produce a multi-second spike on any request. Require the SAME
+			// delayed payload to reproduce the delay on a second, independent
+			// attempt, and confirm an undelayed control request is fast
+			// again, before treating this as more than "likely".
 			start2 := time.Now()
-			_, err2 := he.Get(ctx, buildURL(p.BaseURL, params, p.Name, p.Value))
-			fastAgain := time.Since(start2) < base.elapsed*2+time.Second
+			resp2, err2 := he.Get(ctx, u)
+			elapsed2 := time.Since(start2)
+			delayReproduced := err2 == nil && resp2 != nil &&
+				elapsed2 >= time.Duration(sqliDelaySeconds-1)*time.Second+500*time.Millisecond
+
+			start3 := time.Now()
+			_, err3 := he.Get(ctx, buildURL(p.BaseURL, params, p.Name, p.Value))
+			fastAgain := time.Since(start3) < base.elapsed*2+time.Second
+
 			tier, conf, eq := TierLikely, 68, 60
-			if err2 == nil && fastAgain {
+			reproducedStr := "no"
+			if delayReproduced {
+				reproducedStr = "yes"
+			}
+			if delayReproduced && err3 == nil && fastAgain {
 				tier, conf, eq = TierVerified, 90, 85
 			}
 			return &InjResult{
@@ -121,7 +137,8 @@ func detectSQLi(ctx context.Context, he *httpengine.Engine, p InjParam, params [
 				DetectionMethod: "time_based", DBMS: tp.dbms,
 				Evidence: "injected a " + itoa(sqliDelaySeconds) + "s conditional delay (" + tp.dbms +
 					" syntax); observed " + elapsed.Round(time.Millisecond).String() +
-					" vs baseline " + base.elapsed.Round(time.Millisecond).String(),
+					" vs baseline " + base.elapsed.Round(time.Millisecond).String() +
+					"; delay reproduced on independent retry: " + reproducedStr,
 				CurlCommand: curlFor(p.Method, u),
 				Request:     "GET " + u,
 			}

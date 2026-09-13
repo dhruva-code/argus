@@ -147,7 +147,7 @@ async def test_ai_heuristic_summary(db_session):
         })
     await db_session.commit()
     findings = (await db_session.execute(select(Finding))).scalars().all()
-    out = await analyse(p, findings)
+    out = await analyse(db_session, org.id, p, findings)
     assert out["engine"] == "heuristic"
     assert "actionable finding" in out["summary"]
     assert out["recommended_order"][0]["severity"] == "critical"

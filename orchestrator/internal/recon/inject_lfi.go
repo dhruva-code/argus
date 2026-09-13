@@ -30,10 +30,25 @@ var traversalDepths = []int{3, 4, 5, 6, 8, 10}
 // stored as a short redacted snippet rather than full file content.
 func detectLFI(ctx context.Context, he *httpengine.Engine, p InjParam, params []InjParam, base injBaseline) *InjResult {
 	// ── safe self-referential traversal proof ───────────────────────────
+	// Guard against inert parameters: if the app never uses this parameter to
+	// build a file path, ANY value (traversal or not) returns output
+	// indistinguishable from baseline, which would otherwise look identical
+	// to a genuine "traversal returned the same page" proof. Probe with an
+	// unrelated random control value first — only trust the traversal
+	// comparison below if that control value actually changed something.
 	selfPath := pathOf(p.BaseURL)
 	trimmedSelf := strings.TrimPrefix(selfPath, "/")
 	if trimmedSelf != "" {
+		controlInert := false
+		if cresp, cerr := he.Get(ctx, buildURL(p.BaseURL, params, p.Name, randToken(8))); cerr == nil {
+			if cresp.StatusCode == base.status && bodySimilarity(base.body, string(cresp.Body)) > 0.9 {
+				controlInert = true
+			}
+		}
 		for _, depth := range traversalDepths {
+			if controlInert {
+				break // parameter has no observable effect at all — traversal "proof" would be meaningless
+			}
 			trav := strings.Repeat("../", depth) + trimmedSelf
 			u := buildURL(p.BaseURL, params, p.Name, trav)
 			resp, err := he.Get(ctx, u)
@@ -45,7 +60,7 @@ func detectLFI(ctx context.Context, he *httpengine.Engine, p InjParam, params []
 					Param: p, Class: ClassPathTraversal, Tier: TierVerified, Confidence: 87, EvidenceQuality: 82,
 					DetectionMethod: "self_reference_traversal",
 					Evidence: "requesting the endpoint's own path through " + itoa(depth) +
-						" levels of \"../\" returned the same content — proves traversal without reading a sensitive file",
+						" levels of \"../\" returned the same content (and a random control value did NOT) — proves traversal without reading a sensitive file",
 					CurlCommand: curlFor(p.Method, u),
 					Request:     "GET " + u,
 				}

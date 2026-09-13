@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/argus-platform/orchestrator/internal/httpengine"
 	"github.com/argus-platform/orchestrator/internal/plugin"
@@ -74,6 +77,24 @@ func runEndpointDiscovery(
 		cb.log("INFO", fmt.Sprintf("gau: %d URL(s) → %d new distinct endpoint(s)", len(urls), len(seen)-before))
 	}
 
+	// wayback — historical URLs from the Internet Archive's CDX API. Unlike
+	// gau (a CLI tool via plugin.Runner), this is a direct HTTP call, so a
+	// failure here is a network/API error, not a missing-binary error — it's
+	// still reported as a clear WARNING, never silently swallowed.
+	if wbRows, err := waybackFetch(ctx, opts.Roots); err != nil {
+		cb.log("WARNING", "wayback: "+err.Error())
+	} else {
+		before := len(seen)
+		for _, row := range wbRows {
+			if ep, ok := makeEndpoint(row.url, "GET", eng, "wayback"); ok {
+				ts := row.ts
+				ep.WaybackObservedAt = &ts
+				emit(ep)
+			}
+		}
+		cb.log("INFO", fmt.Sprintf("wayback: %d URL(s) → %d new distinct endpoint(s)", len(wbRows), len(seen)-before))
+	}
+
 	// katana — crawl alive in-scope hosts (bounded; a wildcard zone can make
 	// hundreds of "hosts" that are all the same site)
 	if len(aliveHosts) > 0 {
@@ -134,6 +155,10 @@ type Endpoint struct {
 	InScope           bool     `json:"in_scope"`
 	Tags              []string `json:"tags,omitempty"`
 	Sources           []string `json:"sources"`
+	// WaybackObservedAt is the Internet Archive's CDX capture time for this
+	// URL, set only when "wayback" is one of Sources. The gateway folds
+	// repeated observations (across scans) into a first/last range.
+	WaybackObservedAt *time.Time `json:"wayback_observed_at,omitempty"`
 }
 
 type Param struct {
@@ -348,6 +373,95 @@ func gauFetch(ctx context.Context, r plugin.Runner, roots []string, rps int) ([]
 		}
 	}
 	return urls, nil
+}
+
+// ── wayback adapter ─────────────────────────────────────────────────────
+
+// waybackRow is one CDX API result: an archived URL plus the timestamp the
+// Internet Archive captured it at.
+type waybackRow struct {
+	url string
+	ts  time.Time
+}
+
+// waybackFetch queries the Wayback Machine's CDX API for historical URLs
+// under each root. Unlike gau (a CLI tool run via plugin.Runner), this is a
+// direct HTTP call to a fixed, non-target host — httpengine.Engine can't be
+// reused here since it scope-checks the *destination* of every request, and
+// web.archive.org is never part of a project's scope. That's fine: the URLs
+// CDX *returns* still go through the normal makeEndpoint() -> scope.Evaluate
+// check before ever being trusted or emitted, exactly like gau's output.
+//
+// `collapse=urlkey` asks CDX to return one representative capture per unique
+// URL rather than every capture ever made (which can be enormous for a
+// popular domain) — that single timestamp is used for both the "first" and
+// "last" observed time recorded downstream; a true min/max would need a
+// second, uncollapsed query, which isn't worth doubling the request volume
+// against a shared public service for this feature.
+func waybackFetch(ctx context.Context, roots []string) ([]waybackRow, error) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	var rows []waybackRow
+	var firstErr error
+	for i, root := range roots {
+		if i > 0 {
+			time.Sleep(250 * time.Millisecond) // be polite to a shared public service
+		}
+		q := "https://web.archive.org/cdx/search/cdx?url=" + url.QueryEscape(root+"/*") +
+			"&output=json&fl=original,timestamp&collapse=urlkey&limit=3000"
+		req, err := http.NewRequestWithContext(ctx, "GET", q, nil)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", root, err)
+			}
+			continue
+		}
+		req.Header.Set("User-Agent", "Argus/0.1 (+authorized-assessment)")
+		resp, err := client.Do(req)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", root, err)
+			}
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: CDX API returned HTTP %d", root, resp.StatusCode)
+			}
+			continue
+		}
+		if readErr != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", root, readErr)
+			}
+			continue
+		}
+		if len(body) == 0 {
+			continue // CDX returns an empty body (not even "[]") when a domain has no captures
+		}
+		var raw [][]string
+		if err := json.Unmarshal(body, &raw); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: malformed CDX response: %w", root, err)
+			}
+			continue
+		}
+		for i, r := range raw {
+			if i == 0 || len(r) < 2 { // first row is the header ["original","timestamp"]
+				continue
+			}
+			ts, err := time.Parse("20060102150405", r[1])
+			if err != nil {
+				continue
+			}
+			rows = append(rows, waybackRow{url: r[0], ts: ts})
+		}
+	}
+	if len(rows) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return rows, nil
 }
 
 // ── well-known probes (robots / sitemap / openapi / graphql) ──────────────
