@@ -24,9 +24,27 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+
+# Real JSONB everywhere (so .contains() compiles to Postgres's `@>`
+# containment operator — SQLAlchemy resolves operator overloads from a
+# column's *declared* type, so `.with_variant(JSONB(), "postgresql")` on a
+# generic JSON base does NOT work here: .contains() still resolves to
+# generic JSON's LIKE-based comparator even on a Postgres-bound column).
+# SQLite (tests) can't compile JSONB DDL at all, so this DDL-compiler hook
+# renders it as plain JSON there — SQLite has no @>-vs-LIKE distinction to
+# preserve, and no test exercises a Postgres-specific containment query.
+# Use JSONB (not plain JSON), not bare JSON, for any list-of-strings column
+# that's ever filtered with .contains() — see Asset.technologies /
+# Endpoint.tags / Endpoint.sources.
+@compiles(JSONB, "sqlite")
+def _jsonb_as_json_on_sqlite(element, compiler, **kw):
+    return "JSON"
 
 
 def _uuid() -> uuid.UUID:
@@ -455,7 +473,7 @@ class Asset(Base, TimestampMixin):
     content_type: Mapped[str] = mapped_column(String(120), default="")
     final_url: Mapped[str] = mapped_column(String(1000), default="")
     tls_names: Mapped[list] = mapped_column(JSON, default=list)
-    technologies: Mapped[list] = mapped_column(JSON, default=list)
+    technologies: Mapped[list] = mapped_column(JSONB, default=list)  # filtered via .contains()
 
     tags: Mapped[list] = mapped_column(JSON, default=list)
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -575,8 +593,12 @@ class Endpoint(Base):
     in_scope: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     sensitivity: Mapped[Sensitivity] = mapped_column(Enum(Sensitivity), default=Sensitivity.none, index=True)
     sensitivity_reason: Mapped[str] = mapped_column(String(300), default="")
-    tags: Mapped[list] = mapped_column(JSON, default=list)  # api, admin, swagger, graphql, js…
-    sources: Mapped[list] = mapped_column(JSON, default=list)  # katana, gau, robots, ffuf…
+    tags: Mapped[list] = mapped_column(
+        JSONB, default=list
+    )  # api, admin, swagger, graphql, js… — filtered via .contains()
+    sources: Mapped[list] = mapped_column(
+        JSONB, default=list
+    )  # katana, gau, robots, ffuf… — filtered via .contains()
     # §14 classification + testing-priority score (0-100); §16 API intelligence
     endpoint_class: Mapped[str] = mapped_column(String(30), default="unknown", index=True)
     risk_score: Mapped[int] = mapped_column(Integer, default=0, index=True)
@@ -989,9 +1011,18 @@ class AiSettings(Base, TimestampMixin):
         ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    provider: Mapped[str] = mapped_column(String(40), default="anthropic")
+    provider: Mapped[str] = mapped_column(String(40), default="anthropic")  # anthropic | ollama
     model: Mapped[str] = mapped_column(String(80), default="claude-sonnet-5")
     api_key_enc: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Ollama is a local/self-hosted HTTP server, not a hosted API — no key,
+    # just a reachable base URL (e.g. http://localhost:11434).
+    ollama_base_url: Mapped[str] = mapped_column(String(300), default="http://localhost:11434")
+    # Opt-in: when true, a recon scan asks the configured AI for a short
+    # bug-hunting strategy note after each phase checkpoint (new endpoints/
+    # findings/tech detected so far -> what to prioritize next), stored as a
+    # job event. Off by default — this is extra load on every phase of every
+    # scan, so it must be a deliberate choice, not a surprise default.
+    analyze_every_phase: Mapped[bool] = mapped_column(Boolean, default=False)
     last_test_status: Mapped[str] = mapped_column(
         String(20), default="not_configured"
     )  # not_configured | ok | failed

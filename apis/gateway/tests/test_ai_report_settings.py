@@ -34,7 +34,12 @@ async def test_ai_settings_default_not_configured(admin_client):
 async def test_ai_settings_key_never_returned_only_masked(admin_client):
     r = await admin_client.put(
         "/api/settings/ai",
-        json={"enabled": True, "provider": "anthropic", "model": "claude-sonnet-5", "api_key": "sk-ant-verysecretkey12345"},
+        json={
+            "enabled": True,
+            "provider": "anthropic",
+            "model": "claude-sonnet-5",
+            "api_key": "sk-ant-verysecretkey12345",
+        },
     )
     assert r.status_code == 200
     body = r.json()
@@ -133,7 +138,15 @@ async def test_resolve_config_prefers_db_settings_over_env(db_session, monkeypat
     org, _ = await _project(db_session)
     from app.core.crypto import encrypt
 
-    db_session.add(AiSettings(org_id=org.id, enabled=True, provider="anthropic", model="claude-sonnet-5", api_key_enc=encrypt("db-key")))
+    db_session.add(
+        AiSettings(
+            org_id=org.id,
+            enabled=True,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            api_key_enc=encrypt("db-key"),
+        )
+    )
     await db_session.commit()
 
     cfg = await resolve_config(db_session, org.id)
@@ -158,6 +171,173 @@ async def test_resolve_config_none_when_nothing_configured(db_session, monkeypat
     assert cfg.source == "none"
     assert cfg.enabled is False
     assert cfg.api_key is None
+
+
+# ── Ollama provider ─────────────────────────────────────────────────────
+
+
+async def test_resolve_config_ollama_needs_no_api_key(db_session):
+    org, _ = await _project(db_session)
+    db_session.add(
+        AiSettings(
+            org_id=org.id,
+            enabled=True,
+            provider="ollama",
+            model="qwen2.5:14b",
+            ollama_base_url="http://localhost:11434",
+        )
+    )
+    await db_session.commit()
+    cfg = await resolve_config(db_session, org.id)
+    assert cfg.provider == "ollama"
+    assert cfg.api_key is None
+    assert cfg.usable is True  # unlike anthropic, no key required
+    assert cfg.ollama_base_url == "http://localhost:11434"
+
+
+async def test_resolve_config_ollama_env_fallback(db_session, monkeypatch):
+    monkeypatch.delenv("ARGUS_AI_API_KEY", raising=False)
+    monkeypatch.setenv("ARGUS_OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setenv("ARGUS_OLLAMA_MODEL", "qwen2.5:14b")
+    org, _ = await _project(db_session)
+    cfg = await resolve_config(db_session, org.id)
+    assert cfg.source == "env"
+    assert cfg.provider == "ollama"
+    assert cfg.usable is True
+
+
+async def test_usable_requires_api_key_for_anthropic_but_not_ollama(db_session):
+    org, _ = await _project(db_session)
+    db_session.add(AiSettings(org_id=org.id, enabled=True, provider="anthropic", model="claude-sonnet-5"))
+    await db_session.commit()
+    cfg = await resolve_config(db_session, org.id)
+    # enabled, but no key stored -> not usable (falls through to "none")
+    assert cfg.usable is False
+
+
+async def test_ai_settings_accepts_ollama_provider_via_api(admin_client):
+    r = await admin_client.put(
+        "/api/settings/ai",
+        json={"enabled": True, "provider": "ollama", "model": "qwen2.5:14b"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["provider"] == "ollama"
+    assert body["enabled"] is True
+    # no key was ever provided, and none is required for ollama
+    assert body["api_key_masked"] == ""
+
+
+async def test_ai_test_connection_ollama_unreachable_reports_clearly(admin_client, monkeypatch):
+    import httpx
+
+    async def fake_get(self, url, **kw):
+        raise httpx.ConnectError("connection refused", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    await admin_client.put(
+        "/api/settings/ai",
+        json={"enabled": True, "provider": "ollama", "model": "qwen2.5:14b"},
+    )
+    r = await admin_client.post("/api/settings/ai/test")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+    assert "could not reach" in body["detail"].lower()
+
+
+async def test_ai_test_connection_ollama_missing_model_reports_clearly(admin_client, monkeypatch):
+    import httpx
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"models": [{"name": "llama3:8b"}]}
+
+    async def fake_get(self, url, **kw):
+        return _Resp()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    await admin_client.put(
+        "/api/settings/ai",
+        json={"enabled": True, "provider": "ollama", "model": "qwen2.5:14b"},
+    )
+    r = await admin_client.post("/api/settings/ai/test")
+    body = r.json()
+    assert body["success"] is False
+    assert "not pulled" in body["detail"].lower()
+
+
+# ── per-phase AI analysis (opt-in) ──────────────────────────────────────
+
+
+async def test_analyse_phase_disabled_by_default(db_session):
+    from app.services.ai import analyse_phase
+
+    org, _ = await _project(db_session)
+    db_session.add(
+        AiSettings(org_id=org.id, enabled=True, provider="ollama", model="qwen2.5:14b")
+        # analyze_every_phase defaults to False
+    )
+    await db_session.commit()
+    note = await analyse_phase(
+        db_session, org.id, "Acme", "passive_subdomain_enum", {"counts": {"log": 5}, "samples": ["x"]}
+    )
+    assert note is None
+
+
+async def test_analyse_phase_returns_none_for_empty_summary(db_session):
+    from app.services.ai import analyse_phase
+
+    org, _ = await _project(db_session)
+    db_session.add(
+        AiSettings(
+            org_id=org.id,
+            enabled=True,
+            provider="ollama",
+            model="qwen2.5:14b",
+            analyze_every_phase=True,
+        )
+    )
+    await db_session.commit()
+    note = await analyse_phase(
+        db_session, org.id, "Acme", "passive_subdomain_enum", {"counts": {}, "samples": []}
+    )
+    assert note is None
+
+
+async def test_analyse_phase_calls_llm_when_enabled(db_session, monkeypatch):
+    from app.services import ai as ai_module
+
+    async def fake_call_llm(cfg, prompt, *, max_tokens=2000):
+        assert "passive_subdomain_enum" in prompt
+        return "Focus on the admin subdomain — it exposed a login form."
+
+    monkeypatch.setattr(ai_module, "_call_llm", fake_call_llm)
+    org, _ = await _project(db_session)
+    db_session.add(
+        AiSettings(
+            org_id=org.id,
+            enabled=True,
+            provider="ollama",
+            model="qwen2.5:14b",
+            analyze_every_phase=True,
+        )
+    )
+    await db_session.commit()
+    note = await ai_module.analyse_phase(
+        db_session,
+        org.id,
+        "Acme",
+        "passive_subdomain_enum",
+        {"counts": {"log": 3}, "samples": ["subdomain admin.acme.com [alive]"]},
+    )
+    assert note is not None
+    assert "admin subdomain" in note
 
 
 def test_redact_scrubs_credential_shaped_text():
@@ -239,3 +419,97 @@ async def test_analyse_finding_verified_tier_is_low_fp(db_session):
     f = _Finding(confidence=90, verification="payload_confirmed", tags=["injection", "sqli", "verified"])
     out = await analyse_finding(db_session, org.id, f)
     assert out["ai_analysis"]["false_positive_likelihood"] == "low"
+
+
+# ── System Health → AI connectivity ─────────────────────────────────────
+
+
+async def test_system_health_reports_ai_disabled_by_default(admin_client):
+    r = await admin_client.get("/api/system/health")
+    assert r.status_code == 200
+    ai = r.json()["ai"]
+    assert ai["configured"] is False
+    assert ai["healthy"] is True  # "disabled" isn't a failure state
+
+
+async def test_system_health_checks_ollama_live_every_poll(admin_client, monkeypatch):
+    """Unlike Anthropic (which must not be live-hit on every ~10s poll),
+    Ollama's /api/tags is cheap and safe, so the health check re-verifies
+    it live — this is what catches an Ollama server that OOM-crashed
+    between manual "Test connection" clicks."""
+    import httpx
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"models": [{"name": "qwen2.5:14b"}]}
+
+    real_get = httpx.AsyncClient.get
+
+    # Only intercept the Ollama call — admin_client is ALSO an
+    # httpx.AsyncClient (over an ASGI transport, not real network), so a
+    # blanket patch of AsyncClient.get would break the test client's own
+    # requests to the app, not just the app's outbound call to Ollama.
+    async def fake_get(self, url, **kw):
+        if "11434" in str(url):
+            return _Resp()
+        return await real_get(self, url, **kw)
+
+    await admin_client.put(
+        "/api/settings/ai", json={"enabled": True, "provider": "ollama", "model": "qwen2.5:14b"}
+    )
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    r = await admin_client.get("/api/system/health")
+    ai = r.json()["ai"]
+    assert ai["configured"] is True
+    assert ai["healthy"] is True
+    assert ai["provider"] == "ollama"
+
+
+async def test_system_health_flags_ollama_down_between_manual_tests(admin_client, monkeypatch):
+    import httpx
+
+    real_get = httpx.AsyncClient.get
+
+    async def fake_get(self, url, **kw):
+        if "11434" in str(url):
+            raise httpx.ConnectError("connection refused", request=httpx.Request("GET", url))
+        return await real_get(self, url, **kw)
+
+    await admin_client.put(
+        "/api/settings/ai", json={"enabled": True, "provider": "ollama", "model": "qwen2.5:14b"}
+    )
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    r = await admin_client.get("/api/system/health")
+    ai = r.json()["ai"]
+    assert ai["healthy"] is False
+    assert "unreachable" in ai["detail"].lower()
+
+
+async def test_system_health_does_not_live_test_anthropic(admin_client, monkeypatch):
+    """A hosted provider's health must come from the stored last-test
+    result, not a fresh billed call on every dashboard poll."""
+    import httpx
+
+    called = False
+
+    async def fake_post(self, url, **kw):
+        nonlocal called
+        called = True
+        raise AssertionError("must not make a live Anthropic call from the health endpoint")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    await admin_client.put(
+        "/api/settings/ai",
+        json={"enabled": True, "provider": "anthropic", "model": "claude-sonnet-5", "api_key": "sk-test"},
+    )
+    r = await admin_client.get("/api/system/health")
+    assert r.status_code == 200
+    assert called is False
+    ai = r.json()["ai"]
+    assert ai["configured"] is True
+    assert "not live-checked" in ai["detail"] or "not yet tested" in ai["detail"]

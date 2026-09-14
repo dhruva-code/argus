@@ -115,6 +115,15 @@ async def test_job_lifecycle_and_enqueue(admin_client, _stub_redis):
     r = await admin_client.post(f"/api/jobs/{job['id']}/cancel")
     assert r.status_code == 200
     assert r.json()["status"] == "cancelled"
+    # Regression: cancelling a still-*queued* job (never claimed by any
+    # orchestrator worker) must purge it from the Redis queue — otherwise
+    # a worker eventually claims and actually runs it despite the DB
+    # already showing it cancelled, tying up a worker slot and blocking
+    # every real job queued behind it (the exact "new scan stuck in
+    # queued forever" symptom this test guards against).
+    assert any(c["kind"] == "purge" and c["job_id"] == job["id"] for c in _stub_redis), (
+        "cancelling a queued job must purge it from Redis, or it will still get run later"
+    )
 
 
 async def test_dashboard_shape(admin_client):

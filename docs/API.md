@@ -72,9 +72,10 @@ compile (bad CIDR, bad regex, unknown matcher).
 | GET | `/projects/{id}/analytics?days=30` | `project.read` — FP rate, mean-time-to-triage, scan cadence, riskiest hosts, noisiest templates |
 | POST | `/projects/{id}/ai-summary` | `finding.read` — read-only AI analysis across all findings (LLM when configured under Settings → AI & Analysis or `ARGUS_AI_API_KEY`, else heuristic) |
 | POST | `/projects/{id}/findings/{finding_id}/ai-analysis` | `finding.read` — read-only AI analysis of one finding: `{observed_evidence, ai_analysis, ai_recommendation}`. See [AI_ANALYSIS.md](AI_ANALYSIS.md). |
-| GET/PUT | `/settings/ai` | any authenticated (GET) / `settings.modify` (PUT) — AI provider/model/enabled + masked key preview |
-| POST | `/settings/ai/test` | `settings.modify` — test the configured AI connection |
+| GET/PUT | `/settings/ai` | any authenticated (GET) / `settings.modify` (PUT) — AI provider (`anthropic`\|`ollama`)/model/enabled + masked key preview + `ollama_base_url` + `analyze_every_phase` (opt-in per-phase strategy notes). See [AI_ANALYSIS.md](AI_ANALYSIS.md). |
+| POST | `/settings/ai/test` | `settings.modify` — test the configured AI connection (live for Ollama; billed-request-based for Anthropic) |
 | GET/PUT | `/settings/reports` | any authenticated (GET) / `settings.modify` (PUT) — PDF report branding (company/logo/title/author/contact/confidentiality/accent color) |
+| GET | `/system/health` | any authenticated — database/redis/orchestrator/`ai` connectivity (Ollama checked live every poll; Anthropic reports last manual test) |
 | GET | `/api/metrics` | any authenticated — Prometheus exposition (request + surface metrics) |
 | POST | `/projects/{id}/scans/delete` | `scan.cancel` (+ `project.write` if `purge_data`) — `{"job_ids":[…],"purge_data":false,"reason":"…"}`; finished scans only, running/queued are `skipped`. Audited (`scan.delete`). |
 | DELETE | `/jobs/{job_id}?purge_data=false` | `scan.cancel` (+ `project.write` if `purge_data`) — delete one finished scan |

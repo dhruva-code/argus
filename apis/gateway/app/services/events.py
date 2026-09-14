@@ -112,8 +112,15 @@ async def _apply_event(raw: dict) -> None:
             )
 
         if etype in (
-            "asset", "asset_edge", "vhost", "endpoint", "secret", "repository", "port",
-            "finding", "injection_point",
+            "asset",
+            "asset_edge",
+            "vhost",
+            "endpoint",
+            "secret",
+            "repository",
+            "port",
+            "finding",
+            "injection_point",
         ):
             from app.services.assets import (
                 upsert_asset,
@@ -146,13 +153,25 @@ async def _apply_event(raw: dict) -> None:
                     scan_id=job.id,
                     data=data,
                 )
-                if etype in ("asset", "vhost", "endpoint", "secret", "repository", "port", "finding", "injection_point"):
+                if etype in (
+                    "asset",
+                    "vhost",
+                    "endpoint",
+                    "secret",
+                    "repository",
+                    "port",
+                    "finding",
+                    "injection_point",
+                ):
                     job.result_count = (job.result_count or 0) + 1
             except Exception:  # noqa: BLE001
                 log.exception(
                     "%s upsert failed: %s",
                     etype,
-                    data.get("value") or data.get("normalized_url") or data.get("fingerprint") or data.get("param_name"),
+                    data.get("value")
+                    or data.get("normalized_url")
+                    or data.get("fingerprint")
+                    or data.get("param_name"),
                 )
                 # A DB-level failure (e.g. a DataError) leaves this session's
                 # transaction aborted; Postgres refuses every further
@@ -213,6 +232,17 @@ async def _apply_event(raw: dict) -> None:
         if etype == "error":
             job.error = raw.get("message")
 
+        checkpoint_phase = None
+        msg = raw.get("message", "")
+        if (
+            etype == "log"
+            and job.type == "recon.scan"
+            and isinstance(msg, str)
+            and msg.startswith("checkpoint: ")
+        ):
+            checkpoint_phase = msg.removeprefix("checkpoint: ")
+        org_id, project_id = job.org_id, job.project_id
+
         await session.commit()
 
         # fire notifications when a recon scan finishes
@@ -222,12 +252,89 @@ async def _apply_event(raw: dict) -> None:
             except Exception:  # noqa: BLE001
                 log.exception("post-scan notification failed")
 
+    # Opt-in per-phase AI strategy note (Settings -> AI & Analysis ->
+    # "analyze every phase"). Fired as a background task, not awaited here,
+    # so a slow/unreachable AI provider (a local Ollama model in particular
+    # can take tens of seconds) never stalls the event-consumer loop other
+    # jobs' events are also flowing through.
+    if checkpoint_phase is not None:
+        asyncio.create_task(_run_phase_analysis(jid, org_id, project_id, checkpoint_phase))
+
     # Secret values are shown to authorized operators (masking defeats
     # validation). `raw_for_vault` was a duplicate of `value` kept only as the
     # encrypt-at-rest side channel — drop just that key.
     if raw.get("type") == "secret" and isinstance(raw.get("data"), dict):
         raw["data"].pop("raw_for_vault", None)
     hub.publish(job_id, raw)
+
+
+async def _run_phase_analysis(
+    job_id: uuid.UUID, org_id: uuid.UUID, project_id: uuid.UUID, phase: str
+) -> None:
+    """Builds a lightweight summary of a just-finished phase from its own
+    job event log (the same data a human watching the live log would see),
+    asks the configured AI for a short strategy note, and — if one comes
+    back — appends it as its own job event (type="ai_insight") so it shows
+    up inline in the job's timeline without any new UI surface. Errors are
+    logged, never raised — this is a bonus insight, not part of the scan."""
+    try:
+        async with SessionLocal() as session:
+            from app.models import Project
+            from app.services.ai import analyse_phase
+
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+
+            recent = (
+                (
+                    await session.execute(
+                        select(JobEvent)
+                        .where(JobEvent.job_id == job_id, JobEvent.type != "ai_insight")
+                        .order_by(JobEvent.at.desc())
+                        .limit(60)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            counts: dict[str, int] = defaultdict(int)
+            samples: list[str] = []
+            for e in recent:
+                counts[e.type] += 1
+                if e.type == "log" and e.message.startswith("checkpoint:"):
+                    continue
+                if len(samples) < 12 and e.message:
+                    samples.append(e.message[:200])
+
+            note = await analyse_phase(
+                session, org_id, project.name, phase, {"counts": dict(counts), "samples": samples}
+            )
+            if not note:
+                return
+
+            session.add(
+                JobEvent(
+                    job_id=job_id,
+                    type="ai_insight",
+                    level="INFO",
+                    message=note,
+                    data={"phase": phase},
+                )
+            )
+            await session.commit()
+        hub.publish(
+            str(job_id),
+            {
+                "job_id": str(job_id),
+                "type": "ai_insight",
+                "level": "INFO",
+                "message": note,
+                "data": {"phase": phase},
+            },
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("per-phase AI analysis task failed for job %s phase %s", job_id, phase)
 
 
 async def _on_scan_finished(session, job) -> None:

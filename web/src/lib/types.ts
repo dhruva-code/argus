@@ -75,6 +75,8 @@ export interface AiSettings {
   provider: string;
   model: string;
   api_key_masked: string;
+  ollama_base_url: string;
+  analyze_every_phase: boolean;
   status: "not_configured" | "ok" | "failed";
   last_test_detail: string;
   last_test_at: string | null;

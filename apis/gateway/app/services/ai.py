@@ -65,13 +65,27 @@ def redact(text: str) -> str:
     return out
 
 
+_DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+
 @dataclass
 class ResolvedAiConfig:
     enabled: bool
-    provider: str
+    provider: str  # "anthropic" | "ollama"
     model: str
-    api_key: str | None
+    api_key: str | None  # unused for ollama — local servers aren't keyed
+    ollama_base_url: str
+    analyze_every_phase: bool
     source: str  # "settings" | "env" | "none"
+
+    @property
+    def usable(self) -> bool:
+        """True once this config has everything needed to actually make a
+        call — Anthropic needs a key, Ollama just needs to be enabled (its
+        reachability is only known once test_connection()/a real call runs)."""
+        if not self.enabled:
+            return False
+        return bool(self.api_key) if self.provider == "anthropic" else self.provider == "ollama"
 
 
 async def resolve_config(session: AsyncSession, org_id: uuid.UUID) -> ResolvedAiConfig:
@@ -79,34 +93,93 @@ async def resolve_config(session: AsyncSession, org_id: uuid.UUID) -> ResolvedAi
     from app.models import AiSettings
 
     row = await session.get(AiSettings, org_id)
-    if row is not None and row.enabled and row.api_key_enc:
-        try:
-            key = decrypt(row.api_key_enc)
-        except ValueError:
-            log.warning("ai_settings.api_key_enc for org %s could not be decrypted", org_id)
-            key = None
-        if key:
-            return ResolvedAiConfig(True, row.provider, row.model, key, "settings")
+    if row is not None and row.enabled:
+        if row.provider == "ollama":
+            return ResolvedAiConfig(
+                True,
+                "ollama",
+                row.model,
+                None,
+                row.ollama_base_url,
+                row.analyze_every_phase,
+                "settings",
+            )
+        if row.api_key_enc:
+            try:
+                key = decrypt(row.api_key_enc)
+            except ValueError:
+                log.warning("ai_settings.api_key_enc for org %s could not be decrypted", org_id)
+                key = None
+            if key:
+                return ResolvedAiConfig(
+                    True,
+                    row.provider,
+                    row.model,
+                    key,
+                    row.ollama_base_url,
+                    row.analyze_every_phase,
+                    "settings",
+                )
 
     env_key = os.getenv("ARGUS_AI_API_KEY")
     if env_key:
         return ResolvedAiConfig(
-            True, "anthropic", os.getenv("ARGUS_AI_MODEL", "claude-sonnet-5"), env_key, "env"
+            True,
+            "anthropic",
+            os.getenv("ARGUS_AI_MODEL", "claude-sonnet-5"),
+            env_key,
+            os.getenv("ARGUS_OLLAMA_BASE_URL", _DEFAULT_OLLAMA_URL),
+            False,
+            "env",
+        )
+    env_ollama = os.getenv("ARGUS_OLLAMA_BASE_URL")
+    if env_ollama:
+        return ResolvedAiConfig(
+            True,
+            "ollama",
+            os.getenv("ARGUS_OLLAMA_MODEL", "qwen2.5:14b"),
+            None,
+            env_ollama,
+            False,
+            "env",
         )
 
     return ResolvedAiConfig(
-        False, row.provider if row else "anthropic", row.model if row else "claude-sonnet-5", None, "none"
+        False,
+        row.provider if row else "anthropic",
+        row.model if row else "claude-sonnet-5",
+        None,
+        row.ollama_base_url if row else _DEFAULT_OLLAMA_URL,
+        row.analyze_every_phase if row else False,
+        "none",
     )
 
 
 async def available(session: AsyncSession, org_id: uuid.UUID) -> bool:
     cfg = await resolve_config(session, org_id)
-    return cfg.enabled and bool(cfg.api_key)
+    return cfg.usable
 
 
 async def test_connection(cfg: ResolvedAiConfig) -> tuple[bool, str]:
-    """A minimal, cheap request that only proves the key/model/provider are
+    """A minimal, cheap request that only proves the model/provider are
     valid and reachable — never used for real analysis."""
+    if cfg.provider == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(f"{cfg.ollama_base_url.rstrip('/')}/api/tags")
+            r.raise_for_status()
+            names = {m.get("name", "") for m in r.json().get("models", [])}
+            # Ollama model names are usually "tag:variant" (qwen2.5:14b); a
+            # bare tag still counts as a match against "qwen2.5:14b-instruct" etc.
+            if cfg.model in names or any(n.split(":")[0] == cfg.model.split(":")[0] for n in names):
+                return True, f"connected to Ollama at {cfg.ollama_base_url} — model {cfg.model} is available"
+            return (
+                False,
+                f"Ollama at {cfg.ollama_base_url} is reachable, but model '{cfg.model}' is not pulled (available: {', '.join(sorted(names)) or 'none'})",
+            )
+        except httpx.HTTPError as exc:
+            return False, f"could not reach Ollama at {cfg.ollama_base_url}: {exc}"
+
     if not cfg.api_key:
         return False, "no API key configured"
     if cfg.provider != "anthropic":
@@ -209,6 +282,8 @@ def _heuristic(project, findings) -> dict:
 
 
 async def _call_llm(cfg: ResolvedAiConfig, prompt: str, *, max_tokens: int = 2000) -> str:
+    if cfg.provider == "ollama":
+        return await _call_ollama(cfg, prompt, max_tokens=max_tokens)
     async with httpx.AsyncClient(timeout=60) as c:
         r = await c.post(
             "https://api.anthropic.com/v1/messages",
@@ -225,6 +300,24 @@ async def _call_llm(cfg: ResolvedAiConfig, prompt: str, *, max_tokens: int = 200
         )
         r.raise_for_status()
         return r.json()["content"][0]["text"].strip()
+
+
+async def _call_ollama(cfg: ResolvedAiConfig, prompt: str, *, max_tokens: int = 2000) -> str:
+    # A local model, so a generous timeout — CPU-bound inference on a
+    # midsize (e.g. 14B-parameter) model on modest hardware can genuinely
+    # take several minutes, much longer than a hosted API round-trip.
+    async with httpx.AsyncClient(timeout=300) as c:
+        r = await c.post(
+            f"{cfg.ollama_base_url.rstrip('/')}/api/chat",
+            json={
+                "model": cfg.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"num_predict": max_tokens},
+            },
+        )
+        r.raise_for_status()
+        return r.json()["message"]["content"].strip()
 
 
 def _parse_json_response(text: str) -> dict | None:
@@ -260,7 +353,7 @@ async def _llm_summary(cfg: ResolvedAiConfig, project, findings) -> dict:
 
 async def analyse(session: AsyncSession, org_id: uuid.UUID, project, findings) -> dict:
     cfg = await resolve_config(session, org_id)
-    if cfg.enabled and cfg.api_key and cfg.provider == "anthropic":
+    if cfg.usable:
         try:
             return await _llm_summary(cfg, project, findings)
         except Exception as exc:  # noqa: BLE001
@@ -358,7 +451,7 @@ async def analyse_finding(session: AsyncSession, org_id: uuid.UUID, finding) -> 
     or overwrite the finding's own raw scanner evidence."""
     evidence = _observed_evidence(finding)
     cfg = await resolve_config(session, org_id)
-    if cfg.enabled and cfg.api_key and cfg.provider == "anthropic":
+    if cfg.usable:
         try:
             analysis = await _llm_finding_analysis(cfg, evidence)
         except Exception as exc:  # noqa: BLE001
@@ -378,3 +471,48 @@ async def analyse_finding(session: AsyncSession, org_id: uuid.UUID, finding) -> 
             "remediation": analysis.get("remediation", ""),
         },
     }
+
+
+# ── per-phase bug-hunting strategy (opt-in, AiSettings.analyze_every_phase) ──
+
+# Kept short and cheap on purpose: this runs once per phase per scan, as a
+# background task off the event-ingestion path (see app/services/events.py),
+# never blocking scanning. A local model (Ollama) in particular can take
+# tens of seconds per call, so the prompt and output are both intentionally
+# small — a quick strategic nudge, not a full report.
+_MAX_PHASE_SAMPLES = 12
+
+
+def _phase_prompt(project_name: str, phase: str, summary: dict) -> str:
+    samples = summary.get("samples", [])[:_MAX_PHASE_SAMPLES]
+    return (
+        "You are an experienced bug-bounty hunter acting as a scan co-pilot, mid-assessment. "
+        f"The '{phase}' phase of a recon scan against '{project_name}' just finished. "
+        "Given this short summary of what it found, write 2-4 sentences of concrete, specific "
+        "strategy for what to prioritize investigating next and why — reference the actual hosts/"
+        "paths/technologies given, not generic advice. If nothing here looks worth prioritizing, "
+        "say so briefly instead of padding the answer.\n\n"
+        f"Phase: {phase}\n"
+        f"Counts: {json.dumps(summary.get('counts', {}))}\n"
+        f"Notable items: {json.dumps(samples)}"
+    )
+
+
+async def analyse_phase(
+    session: AsyncSession, org_id: uuid.UUID, project_name: str, phase: str, summary: dict
+) -> str | None:
+    """Returns a short strategy note for this phase's results, or None if
+    AI/per-phase analysis isn't enabled, the summary is empty, or the call
+    fails for any reason — this is a bonus insight, never a scan blocker,
+    so any failure here is swallowed (logged) rather than raised."""
+    cfg = await resolve_config(session, org_id)
+    if not cfg.usable or not cfg.analyze_every_phase:
+        return None
+    if not summary.get("counts") and not summary.get("samples"):
+        return None
+    try:
+        text = await _call_llm(cfg, _phase_prompt(project_name, phase, summary), max_tokens=300)
+        return text.strip() or None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("per-phase AI analysis failed for phase %s: %s", phase, exc)
+        return None

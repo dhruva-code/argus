@@ -21,6 +21,7 @@ interface SystemHealth {
   database: { healthy: boolean; latency_ms?: number; error?: string };
   redis: { healthy: boolean; queued: number | null; processing: number | null };
   orchestrator: { reachable: boolean };
+  ai: { healthy: boolean; configured: boolean; provider: string; detail: string; latency_ms?: number };
 }
 
 const EVENT_LABELS: Record<string, string> = {
@@ -625,7 +626,7 @@ function SystemHealthCard() {
           <Spinner className="h-5 w-5" />
         </div>
       ) : (
-        <div className="grid gap-px bg-border sm:grid-cols-3">
+        <div className="grid gap-px bg-border sm:grid-cols-4">
           <HealthCell name="Database" ok={data.database.healthy} detail={`${data.database.latency_ms ?? "?"} ms`} />
           <HealthCell
             name="Redis"
@@ -633,6 +634,11 @@ function SystemHealthCard() {
             detail={`queued ${data.redis.queued ?? "?"} · processing ${data.redis.processing ?? "?"}`}
           />
           <HealthCell name="Orchestrator" ok={data.orchestrator.reachable} detail={data.orchestrator.reachable ? "worker alive" : "no heartbeat"} />
+          <HealthCell
+            name={`AI (${data.ai.provider})`}
+            ok={data.ai.healthy}
+            detail={data.ai.configured ? data.ai.detail : "not configured"}
+          />
         </div>
       )}
     </Card>

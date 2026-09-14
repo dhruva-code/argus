@@ -10,25 +10,84 @@ identically with it disabled. Implementation: `apis/gateway/app/services/ai.py`.
 permission — org_admin+):
 
 - Enable/disable toggle.
-- Provider (currently only `anthropic` is live-testable/callable; the
-  field is free text for forward compatibility) and model.
-- API key — stored **encrypted at rest** via the same secret-storage
-  backend already used for tool API keys (`app.core.crypto`: local Fernet,
-  or HashiCorp Vault Transit if `VAULT_ADDR`/`VAULT_TOKEN`/`VAULT_TRANSIT_KEY`
-  are set). The plaintext key is **never** returned by any API response —
-  `GET /api/settings/ai` only ever returns a masked preview
-  (`api_key_masked`, e.g. `sk-a****`). It is never logged.
-- **Test connection** button — sends one minimal request (`max_tokens: 8`,
-  "reply with the single word: ok") to confirm the key/model/provider are
-  valid, and records the result as `not_configured` / `ok` / `failed`.
+- Provider: `anthropic` (hosted) or `ollama` (local/self-hosted — no API
+  key needed, just a reachable server URL, default
+  `http://localhost:11434`), and model.
+- API key (Anthropic only) — stored **encrypted at rest** via the same
+  secret-storage backend already used for tool API keys
+  (`app.core.crypto`: local Fernet, or HashiCorp Vault Transit if
+  `VAULT_ADDR`/`VAULT_TOKEN`/`VAULT_TRANSIT_KEY` are set). The plaintext
+  key is **never** returned by any API response — `GET /api/settings/ai`
+  only ever returns a masked preview (`api_key_masked`, e.g. `sk-a****`).
+  It is never logged.
+- **Test connection** button — for Anthropic, sends one minimal request
+  (`max_tokens: 8`, "reply with the single word: ok"); for Ollama, calls
+  `/api/tags` (cheap — never loads the model) and confirms the configured
+  model is actually pulled on that server. Records the result as
+  `not_configured` / `ok` / `failed`.
+- **Analyze every phase** toggle — see "Per-phase bug-hunting strategy"
+  below. Off by default.
 
 A pre-UI deployment that only ever set `ARGUS_AI_API_KEY`/`ARGUS_AI_MODEL`
-environment variables keeps working — `resolve_config()` checks the
-org's `ai_settings` row first and falls back to the environment variables
-if no row is enabled/configured. This is checked directly by
+(or `ARGUS_OLLAMA_BASE_URL`/`ARGUS_OLLAMA_MODEL`) environment variables
+keeps working — `resolve_config()` checks the org's `ai_settings` row
+first and falls back to the environment variables if no row is
+enabled/configured. This is checked directly by
 `tests/test_ai_report_settings.py::test_resolve_config_*`.
 
+### Running a local model with Ollama
+
+```
+ollama pull qwen2.5:14b     # or any other model
+ollama serve                 # usually already running as a service
+```
+
+Then in Settings → AI & Analysis: provider `Ollama`, model `qwen2.5:14b`
+(must match the pulled tag exactly, or at least the part before `:`),
+server URL `http://localhost:11434` (or wherever it's reachable). Hit
+**Test connection** — this only checks the server responds and the model
+is *present*, not that it can actually be *loaded and run* (see sizing
+note below).
+
+**Memory sizing.** Ollama needs enough free RAM (or VRAM, with a GPU) to
+hold the whole model. A 14B-parameter model at Q4 quantization is roughly
+9GB on disk and needs comparably more resident during inference. On a
+memory-constrained host (this was reproduced on a 4-core/7.2GB machine
+with no GPU), the Linux kernel's OOM killer will kill the Ollama process
+mid-request rather than let it swap — `journalctl -u ollama` shows this
+unambiguously (`"The kernel OOM killer killed some processes in this
+unit"`, and the service restart-looping). The connectivity/model-presence
+check still succeeds afterward (it's a cheap metadata call), which is why
+System Health re-checks Ollama live on every poll rather than trusting a
+one-time test — it's the only way to notice this happened between manual
+checks. If this happens: use a smaller/more-quantized model, add more
+RAM, or use a GPU. Every AI call site in this codebase treats an
+unreachable/crashed provider as "fall back to the heuristic," never as a
+hard failure, so the rest of the app is unaffected either way.
+
 ## What it does
+
+### Per-phase bug-hunting strategy (opt-in)
+
+When `Settings → AI & Analysis → "Analyze every phase"` is on, every time a
+recon scan finishes a phase (`checkpoint: <phase>` in the job's own event
+log), a background task (`app.services.events._run_phase_analysis`) builds
+a lightweight summary from that job's own recent event log — the same
+lines a human watching the live log would see, no orchestrator changes
+needed — and asks the configured AI for 2-4 sentences of concrete
+strategy: what's worth prioritizing next, referencing the actual hosts/
+paths/technologies found, not generic advice (`analyse_phase()` in
+`app/services/ai.py`). If one comes back, it's stored as its own job event
+(`type: "ai_insight"`) and rendered as a highlighted callout in the job's
+live log (Job detail page) rather than blending into the raw log lines.
+
+This is fired with `asyncio.create_task(...)`, not awaited inline in the
+event consumer — a local model in particular can take a long time (or, on
+an undersized host, fail outright — see the sizing note above), and this
+must never stall ingestion of other jobs' events. A missing/failed AI call
+here just means no note for that phase; nothing about the scan itself is
+affected. Off by default since it's an extra AI call per phase per scan
+regardless of provider.
 
 ### Project-level executive summary
 
@@ -95,10 +154,15 @@ credential embedded in the raw request.
 
 ## Known limitations
 
-- Only the Anthropic Messages API is actually implemented for both
-  analysis and connection-testing; other `provider` values are accepted
-  and stored but `test_connection()` reports them as unsupported.
-- AI calls are synchronous within the request that triggers them (not a
-  background job/queue) — a slow or unreachable provider adds latency to
-  that one request, though it never blocks scanning (recon workers never
-  call into this module) and always has the heuristic fallback.
+- Anthropic and Ollama are the only two providers actually implemented for
+  analysis and connection-testing; any other `provider` value is accepted
+  and stored but `test_connection()` reports it as unsupported.
+- The project-summary and per-finding AI calls are synchronous within the
+  request that triggers them (not a background job/queue) — a slow or
+  unreachable provider adds latency to that one request, though it never
+  blocks scanning (recon workers never call into this module) and always
+  has the heuristic fallback. Per-phase analysis (above) is the exception —
+  that one is already async/fire-and-forget by design.
+- A local model needs real memory headroom to run reliably, not just to
+  answer a metadata ping — see the sizing note under "Running a local
+  model with Ollama" above.

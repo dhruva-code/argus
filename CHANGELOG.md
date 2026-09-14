@@ -1,6 +1,104 @@
 # Changelog
 
-## Unreleased — Wayback URLs, AI analysis, professional PDF reports
+## Unreleased — Ollama support, per-phase AI strategy, bulk job deletion, bug fixes
+
+Follow-up pass driven by real usage against live targets (a user ran the
+Wayback/AI/PDF release from the previous entry against real bug-bounty
+projects and reported three concrete issues, all confirmed and fixed
+below) plus three new capability requests.
+
+### Added
+
+- **Ollama support** — a second AI provider alongside Anthropic
+  (`Settings → AI & Analysis`): point at any local/self-hosted Ollama
+  server (default `http://localhost:11434`), no API key needed. Both the
+  project-level executive summary and per-finding analysis work against
+  either provider identically; "Test connection" checks the server is
+  reachable and the configured model is actually pulled.
+- **Per-phase AI bug-hunting strategy (opt-in).** New `Settings → AI &
+  Analysis → "Analyze every phase"` toggle (off by default — it adds one
+  AI call per phase per scan). When on, after each recon phase checkpoint
+  the configured AI is asked for a short, specific strategy note based on
+  that phase's own results (built from the job's own event log — no
+  orchestrator changes needed), stored as a distinct `ai_insight` job
+  event and rendered as a highlighted callout in the job's live log rather
+  than blending into the raw log lines. Runs as a fire-and-forget
+  background task off the event-ingestion path, so a slow/unreachable
+  local model never stalls event processing for any job.
+- **AI connectivity in System Health** (`Settings → System`): a fourth
+  health tile alongside Database/Redis/Orchestrator. Ollama is re-checked
+  live on every ~10s poll (`/api/tags` is a cheap metadata call that never
+  loads the model, so this is safe and is the only way to catch a crashed
+  local server between manual tests); a hosted provider like Anthropic
+  reports its last manual test result instead of making a live billed API
+  call on every poll.
+- **Bulk/single scan-job deletion in the global Jobs view**
+  (`/jobs` — previously only available per-project). Select-all-finished,
+  multi-select with an "also delete discovered data" option, grouped into
+  one `POST /projects/{id}/scans/delete` call per affected project so the
+  audit log still records one clean entry per project rather than one per
+  job.
+
+### Fixed
+
+- **Cancelling a still-*queued* job didn't actually stop it from running.**
+  `POST /jobs/{id}/cancel` flipped the DB row to `cancelled` but never
+  removed the job from the Redis queue (`argus:jobs:queued`) or its cached
+  wire payload — the cancellation signal (`send_control("stop", ...)`) is
+  pub/sub and nobody is listening for a job that hasn't been claimed by a
+  worker yet, so it was silently dropped. An orchestrator worker would
+  eventually `BLMOVE`-claim the "cancelled" job id and **run it anyway**,
+  occupying a worker for the job's entire duration and blocking every real
+  job queued behind it — presenting exactly as "a new scan stays stuck in
+  queued forever." Root-caused via full trace of the queue/worker-pool/
+  cancel-signal path; fixed by purging the job's Redis queue entry and
+  payload when cancelling a queued (not yet claimed) job. Regression test
+  added (`test_job_lifecycle_and_enqueue`).
+- **`tag=`/`source=`/`technology=` endpoint and asset filters returned
+  HTTP 500.** `Endpoint.tags`, `Endpoint.sources`, and `Asset.technologies`
+  were plain Postgres `json` columns; SQLAlchemy's `.contains()` on a
+  non-JSONB column compiles to `column LIKE '%' || value || '%'`, and
+  Postgres has no `LIKE` operator for `json` at all
+  (`UndefinedFunctionError: operator does not exist: json ~~ text`). This
+  is exactly why the new Wayback URLs tab appeared empty even though the
+  scan had genuinely found 117 real Wayback-sourced endpoints — the tab's
+  `source=wayback` filter was silently 500ing. Fixed by converting all
+  three columns to real `jsonb` (migration `0012_jsonb_contains_filters`;
+  `.contains()` now compiles correctly to Postgres's `@>` containment
+  operator) — a plain `.with_variant(JSONB(), "postgresql")` on a generic
+  `JSON` base does *not* work for this, since SQLAlchemy resolves operator
+  overloads from the column's declared type, not the per-dialect variant;
+  a `@compiles(JSONB, "sqlite")` DDL hook keeps SQLite-backed tests
+  working. Regression test compiles each filtered query against the
+  Postgres dialect and asserts `@>` appears (not `LIKE`) — catches this
+  class of bug without needing a live Postgres connection in CI.
+- **`POST /settings/ai/test` always failed for Ollama** with "no API key
+  configured" — the check ran before looking at which provider was
+  selected, even though a local Ollama server has no key at all. Found via
+  the very Ollama-support tests written for this pass.
+- Confirmed (not a bug): the `injection_testing` phase reporting no data
+  for a scan run under the `deep_recon` profile is correct, documented
+  behavior — that profile's own description says "still no active
+  injection testing"; use `injection_discovery`/`full_web_assessment` (or
+  pass `params.injection_ack=true` explicitly) to enable it.
+
+### Known limitations
+
+- A local model needs enough RAM to actually load, not just enough to
+  answer `/api/tags`. Tested live against a real Ollama + qwen2.5:14b
+  (Q4_K_M, ~9GB) setup on a 4-core/7.2GB host: the connectivity/model-
+  presence check succeeds every time (cheap metadata call), but a real
+  generate call reliably triggered the Linux kernel's OOM killer
+  (`journalctl`: `"The kernel OOM killer killed some processes in this
+  unit"`, `ollama.service` restart-looping) — CPU-only inference on a
+  14B-parameter model needs meaningfully more headroom than this host
+  has. This is a genuine hardware requirement, not a code defect: the
+  failure is caught and logged, and every caller (per-phase analysis,
+  finding analysis, project summary) falls back to the deterministic
+  heuristic cleanly rather than crashing anything. Documented in
+  docs/AI_ANALYSIS.md with a rough sizing guide.
+
+## Wayback URLs, AI analysis, professional PDF reports
 
 ### Added
 

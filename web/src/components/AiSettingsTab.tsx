@@ -28,7 +28,9 @@ export function AiSettingsTab() {
   const [provider, setProvider] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<AiTestResult | null>(null);
+  const effectiveProvider = provider ?? data?.provider ?? "anthropic";
 
   const update = useMutation({
     mutationFn: (body: Partial<AiSettings> & { api_key?: string }) =>
@@ -78,34 +80,71 @@ export function AiSettingsTab() {
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label>Provider</Label>
-              <Select
-                value={provider ?? data.provider}
-                onChange={(e) => setProvider(e.target.value)}
-              >
+              <Select value={effectiveProvider} onChange={(e) => setProvider(e.target.value)}>
                 <option value="anthropic">Anthropic</option>
+                <option value="ollama">Ollama (local / self-hosted)</option>
               </Select>
             </div>
             <div>
               <Label>Model</Label>
-              <Input value={model ?? data.model} onChange={(e) => setModel(e.target.value)} />
+              <Input
+                value={model ?? data.model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={effectiveProvider === "ollama" ? "qwen2.5:14b" : "claude-sonnet-5"}
+              />
             </div>
           </div>
 
-          <div>
-            <Label>API key</Label>
-            <Input
-              type="password"
-              placeholder={data.api_key_masked || "not set"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              autoComplete="off"
+          {effectiveProvider === "ollama" ? (
+            <div>
+              <Label>Ollama server URL</Label>
+              <Input
+                value={ollamaBaseUrl ?? data.ollama_base_url}
+                onChange={(e) => setOllamaBaseUrl(e.target.value)}
+                placeholder="http://localhost:11434"
+              />
+              <p className="mt-1 text-[11px] text-muted">
+                A local or self-hosted Ollama server — no API key needed. Make sure the model
+                above has been pulled (<code>ollama pull {model ?? data.model}</code>) and that
+                the host has enough RAM to load it; an undersized host will fail mid-request
+                rather than respond slowly.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <Label>API key</Label>
+              <Input
+                type="password"
+                placeholder={data.api_key_masked || "not set"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="off"
+              />
+              <p className="mt-1 text-[11px] text-muted">
+                {data.api_key_masked
+                  ? `Currently: ${data.api_key_masked} — leave blank to keep it, or enter a new key to replace it.`
+                  : "Never shown in full once saved — only a masked preview."}
+              </p>
+            </div>
+          )}
+
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={data.analyze_every_phase}
+              onChange={(e) => update.mutate({ analyze_every_phase: e.target.checked })}
             />
-            <p className="mt-1 text-[11px] text-muted">
-              {data.api_key_masked
-                ? `Currently: ${data.api_key_masked} — leave blank to keep it, or enter a new key to replace it.`
-                : "Never shown in full once saved — only a masked preview."}
-            </p>
-          </div>
+            <span>
+              Analyze every recon phase
+              <span className="block text-[11px] text-muted">
+                After each phase of a scan finishes, ask the AI for a short bug-hunting strategy
+                note based on what that phase found — shown inline in the job&apos;s event log.
+                Runs in the background and never blocks scanning, but adds one AI call per phase
+                per scan, so it&apos;s off by default.
+              </span>
+            </span>
+          </label>
 
           <div className="flex items-center gap-2">
             <Button
@@ -115,6 +154,7 @@ export function AiSettingsTab() {
                   ...(provider !== null ? { provider } : {}),
                   ...(model !== null ? { model } : {}),
                   ...(apiKey ? { api_key: apiKey } : {}),
+                  ...(ollamaBaseUrl !== null ? { ollama_base_url: ollamaBaseUrl } : {}),
                 })
               }
             >
@@ -127,7 +167,7 @@ export function AiSettingsTab() {
             >
               Test connection
             </Button>
-            {data.api_key_masked && (
+            {data.api_key_masked && effectiveProvider === "anthropic" && (
               <Button
                 variant="outline"
                 disabled={update.isPending}

@@ -199,6 +199,8 @@ def _ai_out(row: AiSettings) -> AiSettingsOut:
         provider=row.provider,
         model=row.model,
         api_key_masked=masked,
+        ollama_base_url=row.ollama_base_url,
+        analyze_every_phase=row.analyze_every_phase,
         status=row.last_test_status,
         last_test_detail=row.last_test_detail,
         last_test_at=row.last_test_at,
@@ -227,6 +229,10 @@ async def update_ai_settings(
         row.provider = body.provider
     if body.model is not None:
         row.model = body.model
+    if body.ollama_base_url is not None:
+        row.ollama_base_url = body.ollama_base_url
+    if body.analyze_every_phase is not None:
+        row.analyze_every_phase = body.analyze_every_phase
     if body.api_key is not None:
         row.api_key_enc = encrypt(body.api_key) if body.api_key else None
         # a changed (or cleared) key invalidates any previous test result —
@@ -245,7 +251,9 @@ async def test_ai_settings(
 ) -> AiTestResult:
     row = await _ai_settings(session, principal.org.id)
     cfg = await resolve_config(session, principal.org.id)
-    if not cfg.api_key:
+    # Ollama is a local server — it has no API key at all, so only
+    # Anthropic-family providers need one configured before testing.
+    if cfg.provider != "ollama" and not cfg.api_key:
         row.last_test_status, row.last_test_detail = "not_configured", "no API key configured"
         await session.commit()
         return AiTestResult(success=False, detail=row.last_test_detail)

@@ -219,6 +219,14 @@ async def cancel_job(
     if job.status == JobStatus.queued:
         job.status = JobStatus.cancelled
         job.finished_at = datetime.now(UTC)
+        # A queued job hasn't been claimed by any orchestrator worker yet, so
+        # there's no one listening for the "stop" control message published
+        # below — without this, the job's id stays sitting in the Redis
+        # queue (argus:jobs:queued) and its full wire payload stays cached,
+        # and a worker will eventually BLMOVE-claim and actually *run* it
+        # despite the DB already showing it cancelled, tying up a worker for
+        # the whole scan and blocking every real job queued behind it.
+        await scans.purge_job_keys(str(job_id))
     await scans.request_cancel(str(job_id))
     await audit.record(
         session,
@@ -315,9 +323,7 @@ async def delete_job(
             status.HTTP_409_CONFLICT,
             f"job is {job.status.value} — cancel it before deleting",
         )
-    result = await scans.delete_scans(
-        session, org_id=principal.org.id, jobs=[job], purge_data=purge_data
-    )
+    result = await scans.delete_scans(session, org_id=principal.org.id, jobs=[job], purge_data=purge_data)
     await audit.record(
         session,
         action="scan.delete",

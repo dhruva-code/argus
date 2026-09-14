@@ -5,3 +5,4 @@
 # flags something outside this list, treat it as real until proven otherwise.
 orchestrator/internal/recon/secrets_test.go:jwt:12
 orchestrator/internal/recon/secrets_test.go:github-pat:10
+apis/gateway/tests/test_ai_report_settings.py:curl-auth-header:344

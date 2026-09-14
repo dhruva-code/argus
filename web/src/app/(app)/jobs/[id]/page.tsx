@@ -63,6 +63,7 @@ export default function JobDetail() {
       message: e.message,
       at: e.at,
       type: e.type,
+      data: e.data,
     }));
     const merged = [...base, ...live];
     return filter ? merged.filter((r) => r.level === filter) : merged;
@@ -135,17 +136,35 @@ export default function JobDetail() {
           className="max-h-[460px] overflow-auto bg-[var(--bg)] p-3 font-mono text-xs leading-relaxed"
         >
           {rows.length === 0 && <p className="text-muted">No log lines yet.</p>}
-          {rows.map((r, i) => (
-            <div key={i} className="flex gap-2">
-              <span className="shrink-0 text-muted">
-                {new Date(r.at ?? Date.now()).toLocaleTimeString()}
-              </span>
-              <span className={cn("shrink-0 w-14", LEVEL_COLOR[r.level] ?? "text-fg")}>
-                {r.level}
-              </span>
-              <span className="whitespace-pre-wrap break-all">{r.message}</span>
-            </div>
-          ))}
+          {rows.map((r, i) =>
+            r.type === "ai_insight" ? (
+              <div
+                key={i}
+                className="my-1.5 rounded border border-accent/30 bg-accent/5 px-2.5 py-2 not-italic"
+              >
+                <div className="flex items-center gap-2 text-[11px] text-accent">
+                  <span className="font-semibold">AI strategy note</span>
+                  {typeof r.data?.phase === "string" && (
+                    <span className="text-muted">· {r.data.phase}</span>
+                  )}
+                  <span className="text-muted">
+                    {new Date(r.at ?? Date.now()).toLocaleTimeString()}
+                  </span>
+                </div>
+                <p className="mt-1 whitespace-pre-wrap break-words text-fg">{r.message}</p>
+              </div>
+            ) : (
+              <div key={i} className="flex gap-2">
+                <span className="shrink-0 text-muted">
+                  {new Date(r.at ?? Date.now()).toLocaleTimeString()}
+                </span>
+                <span className={cn("shrink-0 w-14", LEVEL_COLOR[r.level] ?? "text-fg")}>
+                  {r.level}
+                </span>
+                <span className="whitespace-pre-wrap break-all">{r.message}</span>
+              </div>
+            ),
+          )}
         </div>
       </Card>
 

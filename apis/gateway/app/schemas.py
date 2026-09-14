@@ -198,6 +198,8 @@ class AiSettingsOut(BaseModel):
     model: str
     # Never the real key — "" when unset, else a masked preview like "sk-a****".
     api_key_masked: str
+    ollama_base_url: str
+    analyze_every_phase: bool
     status: str  # not_configured | ok | failed
     last_test_detail: str
     last_test_at: datetime | None = None
@@ -208,8 +210,11 @@ class AiSettingsUpdate(BaseModel):
     provider: str | None = Field(default=None, max_length=40)
     model: str | None = Field(default=None, max_length=80)
     # Provide to set/replace; omit to leave the stored key untouched; pass ""
-    # to clear it. Never echoed back by any endpoint.
+    # to clear it. Never echoed back by any endpoint. Meaningless for
+    # provider="ollama" (a local server has no key).
     api_key: str | None = Field(default=None, max_length=500)
+    ollama_base_url: str | None = Field(default=None, max_length=300)
+    analyze_every_phase: bool | None = None
 
 
 class AiTestResult(BaseModel):

@@ -350,10 +350,13 @@ from app.services.findings import upsert_finding, upsert_port, verify_finding  #
 async def test_port_upsert_dedup_and_service_merge(db_session):
     org, p = await _project(db_session)
     common = {"org_id": org.id, "project_id": p.id, "scan_id": None}
-    await upsert_port(db_session, **common, data={"ip": "203.0.113.5", "port": 22, "protocol": "tcp", "service": "ssh"})
+    await upsert_port(
+        db_session, **common, data={"ip": "203.0.113.5", "port": 22, "protocol": "tcp", "service": "ssh"}
+    )
     # re-emit with product/version, and a bare re-emit must not wipe them
     await upsert_port(
-        db_session, **common,
+        db_session,
+        **common,
         data={"ip": "203.0.113.5", "port": 22, "protocol": "tcp", "product": "OpenSSH", "version": "8.9p1"},
     )
     await upsert_port(db_session, **common, data={"ip": "203.0.113.5", "port": 22, "protocol": "tcp"})
@@ -368,25 +371,54 @@ async def test_finding_verification_engine(db_session):
     common = {"org_id": org.id, "project_id": p.id, "scan_id": None}
 
     # 1. low-signal info template → needs_review, low confidence
-    await upsert_finding(db_session, **common, data={
-        "fingerprint": "f-noise", "template_id": "http-missing-security-headers",
-        "severity": "info", "host": "app.acme.com", "matched_at": "https://app.acme.com/",
-        "normalized_path": "/", "tags": ["misconfig"], "level": "passive",
-    })
+    await upsert_finding(
+        db_session,
+        **common,
+        data={
+            "fingerprint": "f-noise",
+            "template_id": "http-missing-security-headers",
+            "severity": "info",
+            "host": "app.acme.com",
+            "matched_at": "https://app.acme.com/",
+            "normalized_path": "/",
+            "tags": ["misconfig"],
+            "level": "passive",
+        },
+    )
     # 2. critical CVE with OOB confirmation → confirmed, high confidence
-    await upsert_finding(db_session, **common, data={
-        "fingerprint": "f-log4j", "template_id": "CVE-2021-44228", "name": "Log4j RCE",
-        "severity": "critical", "host": "api.acme.com", "matched_at": "https://api.acme.com/x",
-        "normalized_path": "/x", "cve": ["CVE-2021-44228"], "oob_confirmed": True,
-        "level": "safe_verify", "matcher_name": "dns",
-    })
+    await upsert_finding(
+        db_session,
+        **common,
+        data={
+            "fingerprint": "f-log4j",
+            "template_id": "CVE-2021-44228",
+            "name": "Log4j RCE",
+            "severity": "critical",
+            "host": "api.acme.com",
+            "matched_at": "https://api.acme.com/x",
+            "normalized_path": "/x",
+            "cve": ["CVE-2021-44228"],
+            "oob_confirmed": True,
+            "level": "safe_verify",
+            "matcher_name": "dns",
+        },
+    )
     # 3. medium exposure, matcher + extracted → probable
-    await upsert_finding(db_session, **common, data={
-        "fingerprint": "f-exp", "template_id": "phpinfo-files", "severity": "medium",
-        "host": "api.acme.com", "matched_at": "https://api.acme.com/info.php",
-        "normalized_path": "/info.php", "matcher_name": "word", "extracted": ["PHP 7.4"],
-        "level": "safe_verify",
-    })
+    await upsert_finding(
+        db_session,
+        **common,
+        data={
+            "fingerprint": "f-exp",
+            "template_id": "phpinfo-files",
+            "severity": "medium",
+            "host": "api.acme.com",
+            "matched_at": "https://api.acme.com/info.php",
+            "normalized_path": "/info.php",
+            "matcher_name": "word",
+            "extracted": ["PHP 7.4"],
+            "level": "safe_verify",
+        },
+    )
     await db_session.commit()
 
     rows = {f.fingerprint: f for f in (await db_session.execute(select(Finding))).scalars().all()}
@@ -400,11 +432,19 @@ async def test_finding_verification_engine(db_session):
     # a human triage decision must survive a later automated re-emit
     rows["f-exp"].status = FindingStatus.false_positive
     await db_session.commit()
-    await upsert_finding(db_session, **common, data={
-        "fingerprint": "f-exp", "template_id": "phpinfo-files", "severity": "medium",
-        "host": "api.acme.com", "matched_at": "https://api.acme.com/info.php",
-        "normalized_path": "/info.php", "level": "safe_verify",
-    })
+    await upsert_finding(
+        db_session,
+        **common,
+        data={
+            "fingerprint": "f-exp",
+            "template_id": "phpinfo-files",
+            "severity": "medium",
+            "host": "api.acme.com",
+            "matched_at": "https://api.acme.com/info.php",
+            "normalized_path": "/info.php",
+            "level": "safe_verify",
+        },
+    )
     await db_session.commit()
     f = await db_session.scalar(select(Finding).where(Finding.fingerprint == "f-exp"))
     assert f.status == FindingStatus.false_positive
@@ -424,3 +464,34 @@ def test_verify_finding_scoring():
         FindingSeverity.high,
     )
     assert verification == "oob_confirmed" and status == FindingStatus.confirmed
+
+
+def test_contains_filtered_json_columns_compile_to_postgres_containment():
+    """Regression test for a real production 500: Endpoint.tags/.sources and
+    Asset.technologies are filtered with `.contains()` in
+    app/routers/assets.py (`tag=`/`source=`/`technology=` query params).
+    SQLAlchemy resolves `.contains()`'s SQL from the column's *declared*
+    type — on a plain `JSON` column (or one JSONB-typed only via
+    `.with_variant`, which does NOT change the resolved comparator) it
+    silently compiles to `col LIKE '%' || value || '%'`, which Postgres
+    rejects outright for a json/jsonb operand (`operator does not exist`).
+    The columns must be declared as real `postgresql.JSONB` so this
+    compiles to the `@>` containment operator instead. This doesn't need a
+    live Postgres connection — compiling the statement against the
+    postgresql dialect is enough to catch a regression back to plain JSON
+    (or another `.with_variant` mistake) without running against SQLite,
+    which can't distinguish the two at all.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql as pg_dialect
+
+    from app.models import Asset, Endpoint
+
+    for stmt in (
+        select(Endpoint).where(Endpoint.tags.contains(["api"])),
+        select(Endpoint).where(Endpoint.sources.contains(["wayback"])),
+        select(Asset).where(Asset.technologies.contains(["nginx"])),
+    ):
+        compiled = str(stmt.compile(dialect=pg_dialect.dialect()))
+        assert "@>" in compiled, f"expected Postgres @> containment, got: {compiled}"
+        assert "LIKE" not in compiled.upper(), f"regressed to LIKE-based contains(): {compiled}"
