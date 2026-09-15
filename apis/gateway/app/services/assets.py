@@ -405,10 +405,10 @@ async def upsert_secret(
     project_id: uuid.UUID,
     scan_id: uuid.UUID | None,
     data: dict[str, Any],
-) -> None:
+) -> Secret | None:
     fp = str(data.get("fingerprint", "")).strip()
     if not fp:
-        return
+        return None
     row = await session.scalar(
         select(Secret).where(Secret.project_id == project_id, Secret.fingerprint == fp)
     )
@@ -452,6 +452,7 @@ async def upsert_secret(
 
     await session.flush()
     await derive_from_secret(session, row)
+    return row
 
 
 async def upsert_repository(

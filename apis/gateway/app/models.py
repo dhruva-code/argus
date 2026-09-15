@@ -679,6 +679,18 @@ class Secret(Base):
     )
     confidence: Mapped[int] = mapped_column(Integer, default=50)
     severity: Mapped[Sensitivity] = mapped_column(Enum(Sensitivity), default=Sensitivity.high)
+    # AI triage (parallel opinion, never a substitute for detector evidence
+    # above) — see app/services/ai.py:analyse_secret. Populated by a
+    # background task fired from events.py on each secret upsert;
+    # ai_fingerprint lets that task skip re-analysis when the evidence sent
+    # to the model hasn't changed since the last run.
+    ai_classification: Mapped[str] = mapped_column(
+        String(20), default=""
+    )  # true_positive|likely|potential|false_positive
+    ai_reasoning: Mapped[str] = mapped_column(Text, default="")
+    ai_engine: Mapped[str] = mapped_column(String(20), default="")  # llm|heuristic
+    ai_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_fingerprint: Mapped[str] = mapped_column(String(64), default="")
     repo_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("repositories.id", ondelete="SET NULL"), nullable=True
     )
@@ -791,6 +803,18 @@ class Finding(Base):
     injection_point_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("injection_points.id", ondelete="SET NULL"), nullable=True
     )
+    # AI triage (parallel opinion layered on top of the scanner/injection-
+    # engine's own `verification`/`verification_tier`/`confidence` above,
+    # never a replacement for them) — see app/services/ai.py:analyse_finding.
+    # Populated by a background task fired from events.py on each finding
+    # upsert; ai_fingerprint lets that task skip re-analysis when the
+    # evidence sent to the model hasn't changed since the last run.
+    ai_classification: Mapped[str] = mapped_column(String(120), default="")
+    ai_false_positive_likelihood: Mapped[str] = mapped_column(String(20), default="")  # low|medium|high
+    ai_reasoning: Mapped[str] = mapped_column(Text, default="")
+    ai_engine: Mapped[str] = mapped_column(String(20), default="")  # llm|heuristic
+    ai_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_fingerprint: Mapped[str] = mapped_column(String(64), default="")
     extra: Mapped[dict] = mapped_column(JSON, default=dict)
     first_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -2,7 +2,6 @@
 
 import { api } from "@/lib/api";
 import type { Asset, AssetSummary } from "@/lib/types";
-import { timeAgo } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Badge, Card, CardHeader, EmptyState, Input, Select, Spinner, StatusBadge } from "./ui";
@@ -24,7 +23,9 @@ export function AssetsPanel({ projectId }: { projectId: string }) {
   });
 
   const params = useMemo(() => {
-    const p = new URLSearchParams({ limit: "500", sort: "confidence" });
+    // "status" (alive assets surface first) — "confidence" was the previous
+    // default, but that column is no longer shown in this table.
+    const p = new URLSearchParams({ limit: "500", sort: "status" });
     if (q) p.set("q", q);
     if (type) p.set("type", type);
     if (status) p.set("status", status);
@@ -125,9 +126,6 @@ export function AssetsPanel({ projectId }: { projectId: string }) {
                   <th className="p-2 text-left font-medium">Status</th>
                   <th className="p-2 text-left font-medium">HTTP</th>
                   <th className="p-2 text-left font-medium">Tech</th>
-                  <th className="p-2 text-left font-medium">Sources</th>
-                  <th className="p-2 text-right font-medium">Conf.</th>
-                  <th className="p-2 text-left font-medium">Last seen</th>
                 </tr>
               </thead>
               <tbody>
@@ -167,23 +165,6 @@ export function AssetsPanel({ projectId }: { projectId: string }) {
                         ))}
                       </div>
                     </td>
-                    <td className="p-2 text-[11px] text-muted">
-                      {a.sources.map((x) => x.source).join(", ")}
-                    </td>
-                    <td className="p-2 text-right tabular-nums">
-                      <span
-                        className={
-                          a.confidence >= 90
-                            ? "text-ok"
-                            : a.confidence >= 70
-                              ? "text-fg"
-                              : "text-muted"
-                        }
-                      >
-                        {a.confidence}
-                      </span>
-                    </td>
-                    <td className="p-2 text-xs text-muted">{timeAgo(a.last_seen)}</td>
                   </tr>
                 ))}
               </tbody>

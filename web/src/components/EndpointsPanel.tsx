@@ -18,6 +18,12 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
   const [q, setQ] = useState("");
   const [method, setMethod] = useState("");
   const [tag, setTag] = useState("");
+  // Default view: only endpoints whose *current* response is
+  // 200/301/302/303/307/401 (exists, redirects, or gates behind auth) —
+  // not 403/404/5xx dead ends, and not endpoints that were only ever
+  // passively discovered and never actually HTTP-probed. Toggle off to
+  // see everything, including those.
+  const [validatedOnly, setValidatedOnly] = useState(true);
 
   const summary = useQuery({
     queryKey: ["endpoint-summary", projectId],
@@ -30,8 +36,9 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
     if (q) p.set("q", q);
     if (method) p.set("method", method);
     if (tag) p.set("tag", tag);
+    if (validatedOnly) p.set("validated_only", "true");
     return p.toString();
-  }, [q, method, tag]);
+  }, [q, method, tag, validatedOnly]);
 
   const endpoints = useQuery({
     queryKey: ["endpoints", projectId, params],
@@ -43,8 +50,9 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Stat label="Endpoints" value={s?.total ?? 0} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+        <Stat label="Endpoints (total)" value={s?.total ?? 0} />
+        <Stat label="Validated (live)" value={s?.validated_total ?? 0} tone="ok" />
         <Stat label="Hosts" value={s?.hosts ?? 0} />
         <Stat label="With parameters" value={s?.with_params ?? 0} />
         <Stat
@@ -74,7 +82,7 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
         <CardHeader
           title="Endpoint inventory"
           action={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Input
                 className="h-7 w-52"
                 placeholder="Filter normalized URL…"
@@ -87,6 +95,14 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
                   <option key={m}>{m}</option>
                 ))}
               </Select>
+              <label className="flex items-center gap-1 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={validatedOnly}
+                  onChange={(e) => setValidatedOnly(e.target.checked)}
+                />
+                validated only (200/301/302/303/307/401)
+              </label>
             </div>
           }
         />
@@ -96,8 +112,12 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
           </div>
         ) : !endpoints.data || endpoints.data.length === 0 ? (
           <EmptyState
-            title="No endpoints yet"
-            hint="The url_endpoint_discovery phase runs katana (crawl), gau (historical URLs) and well-known probes (robots / sitemap / OpenAPI / GraphQL), then deduplicates by structural signature."
+            title={validatedOnly ? "No validated endpoints yet" : "No endpoints yet"}
+            hint={
+              validatedOnly
+                ? "No endpoint currently responds with 200/301/302/303/307/401. Uncheck \"validated only\" to see everything discovered, including dead ends (403/404/5xx) and unprobed URLs."
+                : "The url_endpoint_discovery phase runs katana (crawl), gau (historical URLs) and well-known probes (robots / sitemap / OpenAPI / GraphQL), then deduplicates by structural signature."
+            }
           />
         ) : (
           <div className="max-h-[520px] overflow-auto">
@@ -105,6 +125,7 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
               <thead className="sticky top-0 bg-surface text-xs text-muted">
                 <tr className="border-b border-border">
                   <th className="p-2 text-left font-medium">Method</th>
+                  <th className="p-2 text-left font-medium">Status</th>
                   <th className="p-2 text-left font-medium">Normalized endpoint</th>
                   <th className="p-2 text-left font-medium">Params</th>
                   <th className="p-2 text-left font-medium">Tags</th>
@@ -117,6 +138,7 @@ export function EndpointsPanel({ projectId }: { projectId: string }) {
                     <td className="p-2">
                       <Badge tone={METHOD_TONE[e.method] ?? "neutral"}>{e.method}</Badge>
                     </td>
+                    <td className="p-2 font-mono text-xs text-muted">{e.status_code ?? "—"}</td>
                     <td className="p-2">
                       <div className="font-mono text-xs">{e.normalized_url}</div>
                       <div className="flex gap-1">
@@ -166,9 +188,10 @@ function Stat({
 }: {
   label: string;
   value: number;
-  tone?: "danger" | "warn";
+  tone?: "danger" | "warn" | "ok";
 }) {
-  const c = tone === "danger" ? "text-critical" : tone === "warn" ? "text-medium" : "text-fg";
+  const c =
+    tone === "danger" ? "text-critical" : tone === "warn" ? "text-medium" : tone === "ok" ? "text-ok" : "text-fg";
   return (
     <Card className="p-3">
       <div className="text-xs text-muted">{label}</div>

@@ -25,6 +25,8 @@ the configured provider's own API.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -39,6 +41,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger("argus.ai")
 
 _MAX_FINDINGS = 60
+
+# A local Ollama model is CPU-bound and memory-hungry (a 14B Q4_K_M model
+# alone can approach a modest host's total RAM); two concurrent inferences
+# reliably trigger the OOM killer. Serialize every LLM call — including
+# Anthropic's, where this only adds queuing, never a correctness issue —
+# so a burst of findings/secrets arriving from an active scan can't pile up
+# concurrent model calls. This bounds AI-induced CPU/RAM regardless of how
+# many triage tasks are fired at once (see events.py).
+_LLM_SEMAPHORE = asyncio.Semaphore(1)
 
 # Patterns scrubbed from any freeform text before it's sent to an AI
 # provider — defense in depth on top of the fact that the fields already
@@ -282,24 +293,25 @@ def _heuristic(project, findings) -> dict:
 
 
 async def _call_llm(cfg: ResolvedAiConfig, prompt: str, *, max_tokens: int = 2000) -> str:
-    if cfg.provider == "ollama":
-        return await _call_ollama(cfg, prompt, max_tokens=max_tokens)
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": cfg.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": cfg.model,
-                "max_tokens": max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        )
-        r.raise_for_status()
-        return r.json()["content"][0]["text"].strip()
+    async with _LLM_SEMAPHORE:
+        if cfg.provider == "ollama":
+            return await _call_ollama(cfg, prompt, max_tokens=max_tokens)
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": cfg.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": cfg.model,
+                    "max_tokens": max_tokens,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            r.raise_for_status()
+            return r.json()["content"][0]["text"].strip()
 
 
 async def _call_ollama(cfg: ResolvedAiConfig, prompt: str, *, max_tokens: int = 2000) -> str:
@@ -444,6 +456,17 @@ async def _llm_finding_analysis(cfg: ResolvedAiConfig, evidence: dict) -> dict:
     return out
 
 
+def _evidence_fingerprint(evidence: dict) -> str:
+    """Stable hash of exactly what would be sent to the model/heuristic —
+    used to skip re-analysis when nothing about a finding/secret has
+    changed since it was last triaged (see events.py's triage tasks)."""
+    return hashlib.sha256(json.dumps(evidence, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def finding_fingerprint(f) -> str:
+    return _evidence_fingerprint(_observed_evidence(f))
+
+
 async def analyse_finding(session: AsyncSession, org_id: uuid.UUID, finding) -> dict:
     """Returns {observed_evidence, ai_analysis, ai_recommendation} — the
     three are kept in separate top-level keys everywhere this is rendered
@@ -516,3 +539,118 @@ async def analyse_phase(
     except Exception as exc:  # noqa: BLE001
         log.warning("per-phase AI analysis failed for phase %s: %s", phase, exc)
         return None
+
+
+# ── secret candidate triage (Project -> Secrets & Source) ─────────────────
+#
+# Classifies a *candidate* secret found by a detector (trufflehog/gitleaks/
+# custom) into true_positive/likely/potential/false_positive so the default
+# list view can suppress noise while keeping every raw detection reachable.
+# Only `value_preview` (a short prefix, never the full decrypted value) is
+# ever sent to a provider — the point of triage is to reason about context
+# (detector, location, confidence), not to hand a live credential to a
+# third-party API.
+
+_SECRET_CLASSIFICATIONS = {"true_positive", "likely", "potential", "false_positive"}
+_PLACEHOLDER_MARKERS = (
+    "example",
+    "test",
+    "dummy",
+    "sample",
+    "xxxx",
+    "changeme",
+    "your_",
+    "your-",
+    "placeholder",
+    "<",
+    "todo",
+    "fake",
+    "0000000000",
+)
+
+
+def _secret_evidence(s) -> dict:
+    return {
+        "detector_type": s.detector_type,
+        "detector": s.detector,
+        "source_kind": s.source_kind,
+        "source": (s.source or "")[:300],
+        "location": s.location,
+        "value_preview": s.value_preview,
+        "verified": s.verified,
+        "confidence": s.confidence,
+        "severity": s.severity.value,
+    }
+
+
+def secret_fingerprint(s) -> str:
+    return _evidence_fingerprint(_secret_evidence(s))
+
+
+def _heuristic_secret_analysis(s) -> dict:
+    preview = (s.value_preview or "").lower()
+    location = (s.location or "").lower()
+    looks_placeholder = any(m in preview for m in _PLACEHOLDER_MARKERS) or any(
+        m in location for m in _PLACEHOLDER_MARKERS
+    )
+    if s.verified:
+        cls = "true_positive"
+        reasoning = "Detector independently verified this credential is live."
+    elif looks_placeholder:
+        cls = "false_positive"
+        reasoning = "Value or location contains placeholder-like markers (example/test/dummy/etc.)."
+    elif (s.confidence or 0) >= 80:
+        cls = "likely"
+        reasoning = f"High detector confidence ({s.confidence}%) with no placeholder indicators."
+    elif (s.confidence or 0) >= 50:
+        cls = "potential"
+        reasoning = f"Moderate detector confidence ({s.confidence}%); not independently verified."
+    else:
+        cls = "potential"
+        reasoning = f"Low detector confidence ({s.confidence}%); needs manual review."
+    return {"engine": "heuristic", "classification": cls, "reasoning": reasoning}
+
+
+async def _llm_secret_analysis(cfg: ResolvedAiConfig, evidence: dict) -> dict:
+    prompt = (
+        "You are a senior application security analyst reviewing ONE candidate secret flagged by an "
+        "automated scanner. You are given ONLY a short prefix of the value (never the full secret) plus "
+        "detector metadata, as JSON below. Classify it as EXACTLY one of: "
+        '"true_positive" (a real, likely-live credential), "likely" (probably real but unconfirmed), '
+        '"potential" (plausible but thin evidence), "false_positive" (placeholder/example/test value, or a '
+        "detector mismatch). Return ONLY a JSON object with keys `classification` and `reasoning` "
+        "(1-2 sentences). Base this only on the evidence given — never invent request/response details "
+        "that are not present.\n\n"
+        f"Evidence: {json.dumps(evidence)}"
+    )
+    text = await _call_llm(cfg, prompt, max_tokens=250)
+    out = _parse_json_response(text)
+    if out is None or out.get("classification") not in _SECRET_CLASSIFICATIONS:
+        return {"engine": "llm", "classification": "", "reasoning": text}
+    out["engine"] = "llm"
+    return out
+
+
+async def analyse_secret(session: AsyncSession, org_id: uuid.UUID, secret) -> dict:
+    """Returns {classification, reasoning, engine}. Never touches the
+    secret's own `status`/`verified`/`confidence` fields — those stay
+    exclusively detector-owned; this is a parallel opinion used only to
+    drive default-view suppression, not a replacement for raw evidence."""
+    evidence = _secret_evidence(secret)
+    cfg = await resolve_config(session, org_id)
+    if cfg.usable:
+        try:
+            result = await _llm_secret_analysis(cfg, evidence)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("AI secret analysis LLM path failed, using heuristic: %s", exc)
+            result = _heuristic_secret_analysis(secret)
+    else:
+        result = _heuristic_secret_analysis(secret)
+    if result.get("classification") not in _SECRET_CLASSIFICATIONS:
+        # The model returned free text or an invalid label — never accept an
+        # invented category; fall back to the deterministic heuristic but
+        # keep it honest about which engine actually produced the label.
+        engine = result.get("engine", "heuristic")
+        result = _heuristic_secret_analysis(secret)
+        result["engine"] = engine
+    return result

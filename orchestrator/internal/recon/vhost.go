@@ -54,7 +54,17 @@ func runVHostEnum(ctx context.Context, he *httpengine.Engine, ipHosts map[string
 			continue
 		}
 		base := fmt.Sprintf("https://%s/", ip)
-		bl, err := he.Do(ctx, "GET", base, "argus-baseline-nonexistent.invalid")
+		// The baseline probe's Host header only needs to be *unmatched* by
+		// any real vhost — the literal IP itself already achieves that
+		// (name-based vhosts key on ServerName/ServerAlias, which is never
+		// the bare address) and, unlike an arbitrary made-up hostname, it
+		// is inherently in scope: the caller already confirmed `ip` itself
+		// is in scope via inScopeIP above, so the engine's scope check
+		// (which authorizes by Host-header value — see httpengine.Engine.
+		// check, deliberately strict so a *real* candidate hostname can't
+		// be probed without its own scope approval) passes for exactly the
+		// same reason the destination itself is authorized.
+		bl, err := he.Do(ctx, "GET", base, ip)
 		if err != nil {
 			if httpengine.IsBlocked(err) {
 				cb.log("WARNING", ip+": vhost baseline blocked ("+err.Error()+")")

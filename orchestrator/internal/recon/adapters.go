@@ -3,10 +3,13 @@ package recon
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/argus-platform/orchestrator/internal/plugin"
 )
@@ -124,14 +127,80 @@ func dnsxResolve(ctx context.Context, r plugin.Runner, dir string, hosts []strin
 		return nil, err
 	}
 	var rows []dnsxRow
+	seen := map[string]bool{}
 	for _, ln := range jsonLines(out) {
 		var row dnsxRow
 		if json.Unmarshal(ln, &row) == nil && row.Host != "" {
 			row.Host = normHost(row.Host)
 			rows = append(rows, row)
+			seen[row.Host] = true
 		}
 	}
+
+	// dnsx does its own raw DNS queries against a resolver — it never
+	// consults the OS hostname database, so it cannot resolve a host that
+	// only exists as a static /etc/hosts entry (no real DNS record anywhere
+	// to query). That's the normal case for CTF/lab targets (TryHackMe
+	// .thm, HackTheBox .htb, internal VPN labs) where the platform user has
+	// manually mapped the box's IP in /etc/hosts. Fall back to the system
+	// resolver — which does consult /etc/hosts — for whatever dnsx left
+	// unresolved, so those targets aren't silently dropped from the rest of
+	// the pipeline (see merge_resolve_alive, which only probes `resolved`
+	// hosts).
+	var missing []string
+	for _, h := range hosts {
+		h = normHost(h)
+		if h != "" && !seen[h] {
+			missing = append(missing, h)
+		}
+	}
+	if len(missing) > 0 {
+		rows = append(rows, systemResolveFallback(ctx, missing)...)
+	}
 	return rows, nil
+}
+
+// systemResolveFallback resolves hosts via the OS resolver (which — unlike
+// dnsx's own raw DNS client — consults /etc/hosts, per Go's net package
+// hostLookupOrder), bounded to a small concurrency and a short per-host
+// timeout so a long tail of genuinely nonexistent bruteforce guesses can't
+// stall the pipeline.
+func systemResolveFallback(ctx context.Context, hosts []string) []dnsxRow {
+	const maxConcurrency = 20
+	const perHostTimeout = 3 * time.Second
+
+	sem := make(chan struct{}, maxConcurrency)
+	var mu sync.Mutex
+	var rows []dnsxRow
+	var wg sync.WaitGroup
+	for _, h := range hosts {
+		h := h
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			lctx, cancel := context.WithTimeout(ctx, perHostTimeout)
+			defer cancel()
+			addrs, err := net.DefaultResolver.LookupIPAddr(lctx, h)
+			if err != nil || len(addrs) == 0 {
+				return
+			}
+			row := dnsxRow{Host: h}
+			for _, a := range addrs {
+				if ip4 := a.IP.To4(); ip4 != nil {
+					row.A = append(row.A, ip4.String())
+				} else {
+					row.AAAA = append(row.AAAA, a.IP.String())
+				}
+			}
+			mu.Lock()
+			rows = append(rows, row)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return rows
 }
 
 // ── httpx ──────────────────────────────────────────────────────────────────

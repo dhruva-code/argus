@@ -549,6 +549,10 @@ class EndpointSummary(BaseModel):
     hosts: int
     with_params: int
     by_sensitivity: dict[str, int] = {}
+    # count of endpoints whose *current* status_code is one of
+    # VALIDATED_STATUS_CODES (200/301/302/303/307/401) — what the
+    # "Project -> Endpoints" table shows by default (validated_only=true).
+    validated_total: int = 0
     wayback_total: int = 0
     wayback_new: int = 0
     wayback_parameterized: int = 0
@@ -570,6 +574,13 @@ class SecretOut(ORMModel):
     confidence: int
     severity: str
     has_encrypted_value: bool = False
+    # AI triage — a parallel opinion, never a substitute for the detector
+    # fields above. ai_classification: true_positive|likely|potential|
+    # false_positive|"" (not yet analyzed). See app/services/ai.py.
+    ai_classification: str = ""
+    ai_reasoning: str = ""
+    ai_engine: str = ""
+    ai_analyzed_at: datetime | None = None
     first_seen: datetime
     last_seen: datetime
 
@@ -584,6 +595,9 @@ class SecretSummary(BaseModel):
     unverified: int
     verified: int
     false_positive: int
+    # Count hidden from the default list view (status=false_positive, or
+    # AI-classified false_positive) — see list_secrets' include_suppressed.
+    suppressed_total: int = 0
     by_type: dict[str, int]
     by_severity: dict[str, int]
     by_source_kind: dict[str, int]
@@ -672,6 +686,15 @@ class FindingOut(ORMModel):
     priority_score: int = 0
     priority_band: str = "low"
     in_scope: bool
+    # AI triage — a parallel opinion layered on top of `verification`/
+    # `confidence` above, never a substitute for them. ai_classification is
+    # a free-form short label (e.g. the template/vuln category); see
+    # app/services/ai.py:analyse_finding.
+    ai_classification: str = ""
+    ai_false_positive_likelihood: str = ""
+    ai_reasoning: str = ""
+    ai_engine: str = ""
+    ai_analyzed_at: datetime | None = None
     first_seen: datetime
     last_seen: datetime
     updated_at: datetime
@@ -690,6 +713,10 @@ class FindingSummary(BaseModel):
     confirmed: int
     needs_review: int
     false_positive: int
+    # Count hidden from the default list view (status=false_positive, or
+    # AI-classified false-positive-likelihood=high on a not-independently-
+    # verified finding) — see list_findings' include_suppressed.
+    suppressed_total: int = 0
     by_severity: dict[str, int]
     by_status: dict[str, int]
     oob_confirmed: int

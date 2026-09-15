@@ -38,6 +38,11 @@ export function FindingsPanel({
   const [status, setStatus] = useState("");
   const [severity, setSeverity] = useState("");
   const [open, setOpen] = useState<string | null>(null);
+  // Suppressed = scanner-marked false_positive, or AI-assessed high
+  // false-positive-likelihood on a not-independently-verified finding.
+  // Raw evidence is never deleted — this only hides noise from the
+  // default view; toggle on to review everything, including suppressed.
+  const [includeSuppressed, setIncludeSuppressed] = useState(false);
 
   const summary = useQuery({
     queryKey: ["finding-summary", projectId],
@@ -45,11 +50,12 @@ export function FindingsPanel({
     refetchInterval: 5000,
   });
   const findings = useQuery({
-    queryKey: ["findings", projectId, status, severity],
+    queryKey: ["findings", projectId, status, severity, includeSuppressed],
     queryFn: () => {
       const qs = new URLSearchParams();
       if (status) qs.set("status", status);
       if (severity) qs.set("severity", severity);
+      if (includeSuppressed) qs.set("include_suppressed", "true");
       return api<Finding[]>(`/projects/${projectId}/findings?${qs}`);
     },
     refetchInterval: 5000,
@@ -71,7 +77,7 @@ export function FindingsPanel({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <Stat label="Findings" value={s?.total ?? 0} />
         <Stat label="Confirmed" value={s?.confirmed ?? 0} tone="danger" />
         <Stat label="Needs review" value={s?.needs_review ?? 0} tone="warn" />
@@ -81,13 +87,14 @@ export function FindingsPanel({
           tone="danger"
         />
         <Stat label="OOB confirmed" value={s?.oob_confirmed ?? 0} tone="accent" />
+        <Stat label="Suppressed" value={s?.suppressed_total ?? 0} />
       </div>
 
       <Card>
         <CardHeader
           title="Vulnerability findings"
           action={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Select className="h-7" value={severity} onChange={(e) => setSeverity(e.target.value)}>
                 <option value="">any severity</option>
                 {["critical", "high", "medium", "low", "info"].map((x) => (
@@ -104,6 +111,14 @@ export function FindingsPanel({
                   </option>
                 ))}
               </Select>
+              <label className="flex items-center gap-1 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={includeSuppressed}
+                  onChange={(e) => setIncludeSuppressed(e.target.checked)}
+                />
+                show suppressed
+              </label>
             </div>
           }
         />
@@ -134,6 +149,7 @@ export function FindingsPanel({
                   <th className="p-2 text-left font-medium">Host</th>
                   <th className="p-2 text-right font-medium">Conf.</th>
                   <th className="p-2 text-left font-medium">Verification</th>
+                  <th className="p-2 text-left font-medium">AI assessment</th>
                   <th className="p-2 text-left font-medium">Status</th>
                 </tr>
               </thead>
@@ -141,7 +157,11 @@ export function FindingsPanel({
                 {rows.map((f) => (
                   <Fragment key={f.id}>
                     <tr
-                      className="cursor-pointer border-b border-border last:border-0 hover:bg-surface"
+                      className={`cursor-pointer border-b border-border last:border-0 hover:bg-surface ${
+                        f.status === "false_positive" || f.ai_false_positive_likelihood === "high"
+                          ? "opacity-60"
+                          : ""
+                      }`}
                       onClick={() => setOpen(open === f.id ? null : f.id)}
                     >
                       <td className="p-2 text-right">
@@ -179,6 +199,25 @@ export function FindingsPanel({
                           <span className="text-muted">{f.verification}</span>
                         )}
                       </td>
+                      <td className="p-2 text-xs">
+                        {!f.ai_engine ? (
+                          <span className="text-muted">not yet analyzed</span>
+                        ) : (
+                          <span
+                            title={f.ai_reasoning}
+                            className={
+                              f.ai_false_positive_likelihood === "high"
+                                ? "text-muted"
+                                : f.ai_false_positive_likelihood === "low"
+                                  ? "text-critical"
+                                  : "text-medium"
+                            }
+                          >
+                            {f.ai_classification || "assessed"}
+                            {f.ai_false_positive_likelihood && ` · FP: ${f.ai_false_positive_likelihood}`}
+                          </span>
+                        )}
+                      </td>
                       <td className="p-2" onClick={(e) => e.stopPropagation()}>
                         <Select
                           className="h-7"
@@ -196,7 +235,7 @@ export function FindingsPanel({
                     </tr>
                     {open === f.id && (
                       <tr className="border-b border-border bg-surface">
-                        <td colSpan={7} className="p-3">
+                        <td colSpan={8} className="p-3">
                           <FindingDetail f={f} projectId={projectId} />
                         </td>
                       </tr>
@@ -276,6 +315,26 @@ function FindingDetail({ f, projectId }: { f: Finding; projectId: string }) {
               ref
             </a>
           ))}
+        </div>
+      )}
+      {f.ai_engine && (
+        <div className="rounded border border-border bg-bg p-2">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
+            Automatic AI triage{" "}
+            <span className="normal-case">
+              ({f.ai_engine === "llm" ? "LLM" : "heuristic fallback"}
+              {f.ai_analyzed_at ? ` · ${timeAgo(f.ai_analyzed_at)}` : ""})
+            </span>
+          </div>
+          <p>
+            {f.ai_classification || "unclassified"}
+            {f.ai_false_positive_likelihood && ` · false-positive likelihood: ${f.ai_false_positive_likelihood}`}
+          </p>
+          {f.ai_reasoning && <p className="mt-1 text-muted">{f.ai_reasoning}</p>}
+          <p className="mt-1 text-[10px] text-muted">
+            Runs automatically as this finding is discovered/re-observed — a parallel opinion that never
+            overwrites the raw evidence or verification fields above.
+          </p>
         </div>
       )}
       <AiFindingAnalysis findingId={f.id} projectId={projectId} />

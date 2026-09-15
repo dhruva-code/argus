@@ -56,6 +56,16 @@ from app.services.priority import finding_priority, priority_band
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["assets"])
 
+# "Project -> Endpoints" shows only endpoints whose *current* (latest-probed,
+# not historical) response is one of these — pages that exist, redirect, or
+# gate behind auth, as opposed to 403/404/5xx dead ends or endpoints that
+# were only ever passively discovered (Wayback/gau) and never HTTP-probed
+# at all (status_code IS NULL). `Endpoint.status_code` is already always the
+# latest observed value (upsert_endpoint overwrites it on every re-probe,
+# never appends), so filtering on it directly is filtering on current
+# validated status, not scan history — see app/services/assets.py.
+VALIDATED_STATUS_CODES = (200, 301, 302, 303, 307, 401)
+
 
 async def _project(session: AsyncSession, principal: Principal, pid: uuid.UUID) -> Project:
     p = await session.get(Project, pid)
@@ -253,6 +263,7 @@ async def list_endpoints(
     status_code: int | None = None,
     extension: str | None = None,
     has_params: bool | None = None,
+    validated_only: bool = False,
     limit: int = Query(default=200, le=2000),
     offset: int = 0,
     principal: Principal = Depends(get_principal),
@@ -277,6 +288,8 @@ async def list_endpoints(
         stmt = stmt.where(Endpoint.sources.contains([source.lower()]))
     if status_code is not None:
         stmt = stmt.where(Endpoint.status_code == status_code)
+    if validated_only:
+        stmt = stmt.where(Endpoint.status_code.in_(VALIDATED_STATUS_CODES))
     if extension:
         stmt = stmt.where(Endpoint.path.ilike(f"%.{extension.lstrip('.').lower()}"))
     if has_params is not None:
@@ -312,6 +325,7 @@ async def endpoint_summary(
     by_sens: dict[str, int] = {}
     hosts: set[str] = set()
     with_params = 0
+    validated_total = 0
     wayback_total = 0
     wayback_new = 0
     wayback_parameterized = 0
@@ -325,6 +339,8 @@ async def endpoint_summary(
         hosts.add(e.host)
         if e.params:
             with_params += 1
+        if e.status_code in VALIDATED_STATUS_CODES:
+            validated_total += 1
         if "wayback" in (e.sources or []):
             wayback_total += 1
             if (e.sources or []) == ["wayback"]:
@@ -341,6 +357,7 @@ async def endpoint_summary(
         by_method=by_method,
         by_tag=dict(sorted(by_tag.items(), key=lambda kv: -kv[1])),
         by_sensitivity=by_sens,
+        validated_total=validated_total,
         wayback_total=wayback_total,
         wayback_new=wayback_new,
         wayback_parameterized=wayback_parameterized,
@@ -368,12 +385,21 @@ def _secret_out(row: Secret) -> SecretOut:
     return out
 
 
+def _secret_suppressed(s: Secret) -> bool:
+    """True if this candidate should be hidden from the default list view —
+    already-triaged false positives (scanner-status or AI-classified), kept
+    reachable via include_suppressed=true. Raw evidence is never deleted,
+    only filtered out of the primary view."""
+    return s.status == SecretStatus.false_positive or s.ai_classification == "false_positive"
+
+
 @router.get("/secrets", response_model=list[SecretOut])
 async def list_secrets(
     project_id: uuid.UUID,
     secret_status: SecretStatus | None = Query(default=None, alias="status"),
     detector_type: str | None = None,
     source_kind: str | None = None,
+    include_suppressed: bool = False,
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ) -> list[SecretOut]:
@@ -391,6 +417,8 @@ async def list_secrets(
         .scalars()
         .all()
     )
+    if not include_suppressed and not secret_status:
+        rows = [r for r in rows if not _secret_suppressed(r)]
     return [_secret_out(r) for r in rows]
 
 
@@ -415,6 +443,7 @@ async def secret_summary(
         unverified=sum(1 for s in rows if s.status == SecretStatus.unverified),
         verified=sum(1 for s in rows if s.status == SecretStatus.verified),
         false_positive=sum(1 for s in rows if s.status == SecretStatus.false_positive),
+        suppressed_total=sum(1 for s in rows if _secret_suppressed(s)),
         by_type=dict(sorted(by_type.items(), key=lambda kv: -kv[1])),
         by_severity=by_sev,
         by_source_kind=by_kind,
@@ -542,6 +571,19 @@ def _finding_out(row: Finding, risk_profile) -> FindingOut:
     return out
 
 
+def _finding_suppressed(f: Finding) -> bool:
+    """True if this finding should be hidden from the default list view.
+    Scanner-marked false positives are always suppressed; AI may ALSO
+    suppress a not-yet-independently-verified finding it assessed as a
+    likely false positive — but AI can only ever suppress, never elevate a
+    finding to verified/confirmed on its own (that stays scanner-owned).
+    Raw evidence is never deleted, only filtered out of the primary view —
+    see include_suppressed."""
+    if f.status == FindingStatus.false_positive:
+        return True
+    return f.ai_false_positive_likelihood == "high" and f.verification_tier != "verified"
+
+
 @router.get("/findings", response_model=list[FindingOut])
 async def list_findings(
     project_id: uuid.UUID,
@@ -550,6 +592,7 @@ async def list_findings(
     template_id: str | None = None,
     host: str | None = None,
     min_confidence: int | None = None,
+    include_suppressed: bool = False,
     sort: str = "priority",
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
@@ -568,6 +611,11 @@ async def list_findings(
     if min_confidence is not None:
         stmt = stmt.where(Finding.confidence >= min_confidence)
     rows = (await session.execute(stmt.limit(2000))).scalars().all()
+    # An explicit status filter is itself a deliberate choice (e.g. reviewing
+    # false_positive/needs_review) — only apply the default suppression
+    # filter to the unfiltered "everything" view.
+    if not include_suppressed and not finding_status:
+        rows = [r for r in rows if not _finding_suppressed(r)]
     out = [_finding_out(r, project.risk_profile) for r in rows]
     if sort == "severity":
         out.sort(key=lambda o: (_SEV_ORDER.get(o.severity, 0), o.confidence), reverse=True)
@@ -598,6 +646,7 @@ async def finding_summary(
         confirmed=sum(1 for f in rows if f.status == FindingStatus.confirmed),
         needs_review=sum(1 for f in rows if f.status == FindingStatus.needs_review),
         false_positive=sum(1 for f in rows if f.status == FindingStatus.false_positive),
+        suppressed_total=sum(1 for f in rows if _finding_suppressed(f)),
         by_severity=by_sev,
         by_status=by_status,
         oob_confirmed=sum(1 for f in rows if f.verification == "oob_confirmed"),

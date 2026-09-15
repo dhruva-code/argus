@@ -256,13 +256,11 @@ export interface DashboardStats {
 export type AssetType = "domain" | "subdomain" | "ip" | "url";
 export type AssetStatus = "unknown" | "resolved" | "alive" | "dead";
 
-export interface AssetSource {
-  source: string;
-  detail: string;
-  first_seen: string;
-  last_seen: string;
-}
-
+// Asset.confidence / .sources / .last_seen are still returned by the API
+// (other consumers — reports, a future detail view — may still want them)
+// but are intentionally omitted here: the Asset Inventory table is the
+// only place this type is used, and it no longer displays those columns.
+// See CHANGELOG.md for why they were removed from the UI.
 export interface Asset {
   id: string;
   type: AssetType;
@@ -270,7 +268,6 @@ export interface Asset {
   in_scope: boolean;
   scope_reason: string;
   status: AssetStatus;
-  confidence: number;
   ip_addresses: string[];
   cname: string;
   asn: string;
@@ -291,8 +288,6 @@ export interface Asset {
   cloud_provider: string;
   geo_country: string;
   first_seen: string;
-  last_seen: string;
-  sources: AssetSource[];
 }
 
 export interface AssetSummary {
@@ -366,6 +361,11 @@ export interface EndpointSummary {
   by_sensitivity: Record<string, number>;
   hosts: number;
   with_params: number;
+  // Count of endpoints whose *current* status_code is one of
+  // 200/301/302/303/307/401 — see VALIDATED_STATUS_CODES in
+  // app/routers/assets.py. Distinct from `total`, which includes dead
+  // ends (403/404/5xx) and passively-discovered/unprobed endpoints.
+  validated_total: number;
   wayback_total: number;
   wayback_new: number;
   wayback_parameterized: number;
@@ -392,6 +392,8 @@ export interface AssetGraph {
 export type Severity = "none" | "low" | "medium" | "high" | "critical";
 export type SecretStatus = "unverified" | "verified" | "false_positive" | "revoked";
 
+export type SecretAiClassification = "" | "true_positive" | "likely" | "potential" | "false_positive";
+
 export interface Secret {
   id: string;
   fingerprint: string;
@@ -407,6 +409,12 @@ export interface Secret {
   confidence: number;
   severity: Severity;
   has_encrypted_value: boolean;
+  // AI triage — a parallel opinion, never a substitute for the detector
+  // fields above. "" means not yet analyzed.
+  ai_classification: SecretAiClassification;
+  ai_reasoning: string;
+  ai_engine: string;
+  ai_analyzed_at: string | null;
   first_seen: string;
   last_seen: string;
 }
@@ -416,6 +424,7 @@ export interface SecretSummary {
   unverified: number;
   verified: number;
   false_positive: number;
+  suppressed_total: number;
   by_type: Record<string, number>;
   by_severity: Record<string, number>;
   by_source_kind: Record<string, number>;
@@ -511,6 +520,14 @@ export interface Finding {
   priority_score: number;
   priority_band: string;
   in_scope: boolean;
+  // AI triage — a parallel opinion layered on top of `verification`/
+  // `confidence` above, never a substitute for them. "" means not yet
+  // analyzed.
+  ai_classification: string;
+  ai_false_positive_likelihood: "" | "low" | "medium" | "high";
+  ai_reasoning: string;
+  ai_engine: string;
+  ai_analyzed_at: string | null;
   first_seen: string;
   last_seen: string;
   updated_at: string;
@@ -540,6 +557,7 @@ export interface FindingSummary {
   confirmed: number;
   needs_review: number;
   false_positive: number;
+  suppressed_total: number;
   by_severity: Record<string, number>;
   by_status: Record<string, number>;
   oob_confirmed: number;

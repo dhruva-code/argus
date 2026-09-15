@@ -221,6 +221,60 @@ async def test_endpoint_dedup_by_normalized_url(db_session):
     assert rows[0].tags == ["api"]
 
 
+async def test_validated_only_filters_to_current_live_status(admin_client):
+    """"Project -> Endpoints" shows only endpoints whose *current* (latest-
+    probed) response is 200/301/302/303/307/401 — not 403/404/5xx dead ends,
+    and not endpoints that were only ever passively discovered and never
+    actually HTTP-probed (status_code IS NULL, e.g. Wayback-only URLs)."""
+    from app.db import SessionLocal
+
+    r = await admin_client.post("/api/projects", json={"name": "Validated Filter Proj"})
+    pid = r.json()["id"]
+    me = (await admin_client.get("/api/auth/me")).json()
+    org_id = uuid.UUID(me["active_org"])
+
+    async with SessionLocal() as s:
+        common = {"org_id": org_id, "project_id": uuid.UUID(pid), "scan_id": None}
+        for path, status_code, source in (
+            ("/ok", 200, "katana"),
+            ("/redirect", 301, "katana"),
+            ("/login", 401, "katana"),
+            ("/missing", 404, "katana"),
+            ("/broken", 500, "katana"),
+            ("/never-probed", None, "wayback"),
+        ):
+            await upsert_endpoint(
+                s,
+                **common,
+                data={
+                    "method": "GET",
+                    "host": "app.example.com",
+                    "path": path,
+                    "normalized_url": f"app.example.com{path}",
+                    "sample_url": f"https://app.example.com{path}",
+                    "status_code": status_code,
+                    "sources": [source],
+                    "in_scope": True,
+                },
+            )
+        await s.commit()
+
+    r = await admin_client.get(f"/api/projects/{pid}/endpoints?validated_only=true&limit=100")
+    assert r.status_code == 200
+    paths = {e["path"] for e in r.json()}
+    assert paths == {"/ok", "/redirect", "/login"}, paths
+
+    # without the filter, everything (including unprobed/dead-end) is visible
+    r2 = await admin_client.get(f"/api/projects/{pid}/endpoints?limit=100")
+    assert {e["path"] for e in r2.json()} == {
+        "/ok", "/redirect", "/login", "/missing", "/broken", "/never-probed",
+    }
+
+    summary = (await admin_client.get(f"/api/projects/{pid}/endpoints/summary")).json()
+    assert summary["validated_total"] == 3
+    assert summary["total"] == 6
+
+
 async def test_endpoint_wayback_timestamps_track_min_max(db_session):
     org, p = await _project(db_session)
     common = {"org_id": org.id, "project_id": p.id, "scan_id": None}

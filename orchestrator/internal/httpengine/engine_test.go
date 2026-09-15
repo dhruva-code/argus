@@ -77,6 +77,41 @@ func TestAllowedRequestWithHostHeader(t *testing.T) {
 	}
 }
 
+// TestBaselineProbeUsesLiteralIPAsHostHeader documents/verifies the fix for
+// vhost.go's baseline probe: it used to send a synthetic, unauthorizable
+// hostname as the Host-header override (which the scope check — correctly,
+// for a genuine vhost *candidate* — evaluates on its own), so the baseline
+// request was scope-rejected even when the destination IP itself was fully
+// in scope. Using the literal IP as the Host-header override instead is
+// itself an in-scope value whenever the IP is, so the baseline probe now
+// succeeds without weakening the scope check for real candidate hostnames.
+func TestBaselineProbeUsesLiteralIPAsHostHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	e := newEngine(t, []scope.Rule{
+		{ID: "a1", Effect: scope.Allow, Type: scope.MatchIP, Value: "127.0.0.1"},
+	}, []string{"127.0.0.0/8"})
+
+	// The old synthetic-hostname baseline probe: rejected, since no rule
+	// authorizes an arbitrary made-up hostname.
+	if _, err := e.Do(context.Background(), "GET", srv.URL+"/", "argus-baseline-nonexistent.invalid"); !IsBlocked(err) {
+		t.Fatalf("expected a synthetic unauthorized hostname to be scope-blocked, got %v", err)
+	}
+
+	// The fixed baseline probe: the literal IP as Host header is itself an
+	// in-scope value, so it must succeed.
+	resp, err := e.Do(context.Background(), "GET", srv.URL+"/", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("baseline probe with literal IP as Host header should be allowed: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
 func TestResponseCap(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		big := make([]byte, 1<<20)

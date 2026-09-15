@@ -18,6 +18,10 @@ const SEV_TONE: Record<string, "danger" | "warn" | "accent" | "neutral"> = {
 export function SecretsPanel({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const [status, setStatus] = useState("");
+  // Suppressed = scanner-status false_positive, or AI-classified
+  // false_positive. Raw evidence is never deleted — toggle on to review
+  // everything, including suppressed candidates.
+  const [includeSuppressed, setIncludeSuppressed] = useState(false);
 
   const summary = useQuery({
     queryKey: ["secret-summary", projectId],
@@ -25,9 +29,13 @@ export function SecretsPanel({ projectId }: { projectId: string }) {
     refetchInterval: 5000,
   });
   const secrets = useQuery({
-    queryKey: ["secrets", projectId, status],
-    queryFn: () =>
-      api<Secret[]>(`/projects/${projectId}/secrets${status ? `?status=${status}` : ""}`),
+    queryKey: ["secrets", projectId, status, includeSuppressed],
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      if (status) qs.set("status", status);
+      if (includeSuppressed) qs.set("include_suppressed", "true");
+      return api<Secret[]>(`/projects/${projectId}/secrets?${qs}`);
+    },
     refetchInterval: 5000,
   });
   const repos = useQuery({
@@ -49,10 +57,11 @@ export function SecretsPanel({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <Stat label="Secret candidates" value={s?.total ?? 0} tone="danger" />
         <Stat label="Unverified" value={s?.unverified ?? 0} tone="warn" />
         <Stat label="Verified" value={s?.verified ?? 0} tone="danger" />
+        <Stat label="Suppressed" value={s?.suppressed_total ?? 0} />
         <Stat label="Repositories" value={repos.data?.length ?? 0} />
       </div>
 
@@ -60,14 +69,24 @@ export function SecretsPanel({ projectId }: { projectId: string }) {
         <CardHeader
           title="Secret candidates"
           action={
-            <Select className="h-7" value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">all</option>
-              {["unverified", "verified", "false_positive", "revoked"].map((x) => (
-                <option key={x} value={x}>
-                  {x.replace(/_/g, " ")}
-                </option>
-              ))}
-            </Select>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select className="h-7" value={status} onChange={(e) => setStatus(e.target.value)}>
+                <option value="">all</option>
+                {["unverified", "verified", "false_positive", "revoked"].map((x) => (
+                  <option key={x} value={x}>
+                    {x.replace(/_/g, " ")}
+                  </option>
+                ))}
+              </Select>
+              <label className="flex items-center gap-1 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={includeSuppressed}
+                  onChange={(e) => setIncludeSuppressed(e.target.checked)}
+                />
+                show suppressed
+              </label>
+            </div>
           }
         />
         <p className="border-b border-border px-4 py-2 text-xs text-muted">
@@ -94,12 +113,20 @@ export function SecretsPanel({ projectId }: { projectId: string }) {
                   <th className="p-2 text-left font-medium">Value</th>
                   <th className="p-2 text-left font-medium">Location</th>
                   <th className="p-2 text-left font-medium">Detector</th>
+                  <th className="p-2 text-left font-medium">AI assessment</th>
                   <th className="p-2 text-left font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {secrets.data.map((sec) => (
-                  <tr key={sec.id} className="border-b border-border last:border-0">
+                  <tr
+                    key={sec.id}
+                    className={`border-b border-border last:border-0 ${
+                      sec.status === "false_positive" || sec.ai_classification === "false_positive"
+                        ? "opacity-60"
+                        : ""
+                    }`}
+                  >
                     <td className="p-2 font-medium">{sec.detector_type}</td>
                     <td className="p-2">
                       <Badge tone={SEV_TONE[sec.severity]}>{sec.severity}</Badge>
@@ -112,6 +139,24 @@ export function SecretsPanel({ projectId }: { projectId: string }) {
                     </td>
                     <td className="p-2 text-xs text-muted">
                       {sec.detector} · {sec.source_kind}
+                    </td>
+                    <td className="p-2 text-xs">
+                      {!sec.ai_engine ? (
+                        <span className="text-muted">not yet analyzed</span>
+                      ) : (
+                        <span
+                          title={sec.ai_reasoning}
+                          className={
+                            sec.ai_classification === "true_positive"
+                              ? "text-critical"
+                              : sec.ai_classification === "false_positive"
+                                ? "text-muted"
+                                : "text-medium"
+                          }
+                        >
+                          {sec.ai_classification.replace(/_/g, " ") || "assessed"}
+                        </span>
+                      )}
                     </td>
                     <td className="p-2">
                       <Select

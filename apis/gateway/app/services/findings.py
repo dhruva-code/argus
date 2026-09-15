@@ -221,10 +221,10 @@ async def upsert_finding(
     project_id: uuid.UUID,
     scan_id: uuid.UUID | None,
     data: dict[str, Any],
-) -> None:
+) -> Finding | None:
     fp = str(data.get("fingerprint", "")).strip()
     if not fp:
-        return
+        return None
     try:
         severity = FindingSeverity(str(data.get("severity", "info")).lower())
     except ValueError:
@@ -322,6 +322,8 @@ async def upsert_finding(
         )
         if asset is not None:
             row.asset_id = asset.id
+
+    return row
 
 
 # ── unified finding engine (M6) ───────────────────────────────────────────

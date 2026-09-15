@@ -92,6 +92,8 @@ async def _apply_event(raw: dict) -> None:
             return
 
         etype = raw.get("type", "log")
+        triage_finding_id: uuid.UUID | None = None
+        triage_secret_id: uuid.UUID | None = None
 
         # High-frequency recon events: the row is the artifact, so don't also
         # write a job_event for every one (asset events keep a slim log line).
@@ -146,13 +148,17 @@ async def _apply_event(raw: dict) -> None:
                 "injection_point": upsert_injection_point,
             }[etype]
             try:
-                await fn(
+                upserted = await fn(
                     session,
                     org_id=job.org_id,
                     project_id=job.project_id,
                     scan_id=job.id,
                     data=data,
                 )
+                if etype == "finding" and upserted is not None:
+                    triage_finding_id = upserted.id
+                elif etype == "secret" and upserted is not None:
+                    triage_secret_id = upserted.id
                 if etype in (
                     "asset",
                     "vhost",
@@ -260,11 +266,29 @@ async def _apply_event(raw: dict) -> None:
     if checkpoint_phase is not None:
         asyncio.create_task(_run_phase_analysis(jid, org_id, project_id, checkpoint_phase))
 
-    # Secret values are shown to authorized operators (masking defeats
-    # validation). `raw_for_vault` was a duplicate of `value` kept only as the
-    # encrypt-at-rest side channel — drop just that key.
+    # AI triage for findings/secrets (Project -> Findings / Secrets & Source).
+    # Fire-and-forget, same rationale as the phase analysis above: a slow or
+    # unreachable AI provider must never stall the event-consumer loop other
+    # jobs' events are flowing through. Each task independently checks
+    # ai_fingerprint before doing any work, so an unchanged re-observation of
+    # the same finding/secret across re-scans is a cheap no-op, not a fresh
+    # LLM call.
+    if triage_finding_id is not None:
+        asyncio.create_task(_run_finding_triage(triage_finding_id, org_id))
+    if triage_secret_id is not None:
+        asyncio.create_task(_run_secret_triage(triage_secret_id, org_id))
+
+    # Secret values are shown to authorized operators via the dedicated
+    # /secrets endpoint (finding.read, every status change audited) —
+    # masking there defeats validation. But this live SSE stream only
+    # requires project.read, and the persisted job_events row for a "secret"
+    # event deliberately keeps its data empty (see `_quiet`/`ev_data` above)
+    # — so the raw value must not leak through the live pre-persistence
+    # publish either. Strip both the vault side-channel and the raw value
+    # itself; only redacted/preview-safe fields continue to the timeline.
     if raw.get("type") == "secret" and isinstance(raw.get("data"), dict):
         raw["data"].pop("raw_for_vault", None)
+        raw["data"].pop("value", None)
     hub.publish(job_id, raw)
 
 
@@ -335,6 +359,65 @@ async def _run_phase_analysis(
         )
     except Exception:  # noqa: BLE001
         log.exception("per-phase AI analysis task failed for job %s phase %s", job_id, phase)
+
+
+async def _run_finding_triage(finding_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """AI-assess one finding (classification / false-positive likelihood /
+    reasoning) and persist the result on the finding row, strictly separate
+    from its scanner-owned verification/confidence fields. Skips the call
+    entirely if the evidence hasn't changed since the last analysis
+    (ai_fingerprint match) — repeated re-observations across re-scans of the
+    same finding must not re-trigger an LLM call. Any failure is logged,
+    never raised: triage is an enrichment, not part of the scan itself."""
+    try:
+        from app.models import Finding
+        from app.services import ai
+
+        async with SessionLocal() as session:
+            finding = await session.get(Finding, finding_id)
+            if finding is None:
+                return
+            fp = ai.finding_fingerprint(finding)
+            if finding.ai_analyzed_at is not None and finding.ai_fingerprint == fp:
+                return
+            result = await ai.analyse_finding(session, org_id, finding)
+            analysis = result["ai_analysis"]
+            finding.ai_classification = (analysis.get("classification") or "")[:120]
+            finding.ai_false_positive_likelihood = (analysis.get("false_positive_likelihood") or "")[:20]
+            finding.ai_reasoning = (analysis.get("severity_reasoning") or "")[:2000]
+            finding.ai_engine = analysis.get("engine", "")[:20]
+            finding.ai_analyzed_at = datetime.now(UTC)
+            finding.ai_fingerprint = fp
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("AI finding triage failed for finding %s", finding_id)
+
+
+async def _run_secret_triage(secret_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """AI-assess one candidate secret (true_positive/likely/potential/
+    false_positive) and persist the result, strictly separate from the
+    detector-owned status/verified/confidence fields. Same fingerprint-
+    based caching and error-swallowing as _run_finding_triage above."""
+    try:
+        from app.models import Secret
+        from app.services import ai
+
+        async with SessionLocal() as session:
+            secret = await session.get(Secret, secret_id)
+            if secret is None:
+                return
+            fp = ai.secret_fingerprint(secret)
+            if secret.ai_analyzed_at is not None and secret.ai_fingerprint == fp:
+                return
+            result = await ai.analyse_secret(session, org_id, secret)
+            secret.ai_classification = (result.get("classification") or "")[:20]
+            secret.ai_reasoning = (result.get("reasoning") or "")[:2000]
+            secret.ai_engine = (result.get("engine") or "")[:20]
+            secret.ai_analyzed_at = datetime.now(UTC)
+            secret.ai_fingerprint = fp
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        log.exception("AI secret triage failed for secret %s", secret_id)
 
 
 async def _on_scan_finished(session, job) -> None:
