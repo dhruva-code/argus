@@ -155,15 +155,34 @@ env_setup_run "$INSTALL_PROFILE"
 docker_check >/dev/null 2>&1 || docker_offer_install
 
 # ── Backing services ─────────────────────────────────────────────────────
-db_start || warn "postgres did not start automatically — start it manually and re-run"
-redis_start || warn "redis did not start automatically — start it manually and re-run"
+# These now try docker compose, then a native systemd unit, then a native
+# apt install, in that order — a failure here means none of those worked,
+# which nothing downstream (migrations, the app itself) can do anything
+# useful without, so it's treated as fatal rather than a warning the rest
+# of the install would otherwise silently limp past.
+db_start || die "postgres could not be started automatically — see the diagnostic above, or start it manually and re-run"
+redis_start || die "redis could not be started automatically — start it manually and re-run"
 
 # ── Database ──────────────────────────────────────────────────────────────
-if db_tcp_reachable; then
-  db_migrate
-else
-  warn "skipping migrations — database not reachable"
-fi
+db_migrate || die "database migrations failed — see ${ARGUS_LOG_DIR}/install.log"
+
+# ── Default admin account ────────────────────────────────────────────────
+# Idempotent (does nothing if the account already exists) — ensures a fresh
+# install always ends with working, documented login credentials instead of
+# requiring a separate manual step. Uses ARGUS_DEFAULT_ADMIN_PASSWORD from
+# .env if set (install.sh sets this on a fresh .env), otherwise a random
+# password is generated and printed once. DATABASE_URL/ARGUS_DEFAULT_ADMIN_
+# PASSWORD are read via plain os.getenv/pydantic-settings' env_file (which
+# resolves ".env" relative to CWD, i.e. the gateway dir, not $ARGUS_ROOT) —
+# export them explicitly rather than relying on that, same as db_migrate.
+step "Default admin account"
+db_load_config
+(
+  cd "$ARGUS_GATEWAY_DIR" &&
+  DATABASE_URL="$(db_url)" \
+  ARGUS_DEFAULT_ADMIN_PASSWORD="$(db_env ARGUS_DEFAULT_ADMIN_PASSWORD)" \
+  "$ARGUS_VENV_DIR/bin/python" -m app.bootstrap_admin
+) || warn "could not create the default admin account automatically — run manually: cd apis/gateway && .venv/bin/python -m app.bootstrap_admin"
 
 # ── Security tools ───────────────────────────────────────────────────────
 tools_install_all

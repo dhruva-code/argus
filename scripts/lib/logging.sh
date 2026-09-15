@@ -18,6 +18,8 @@ _log_file_for() {
   case "$1" in
     install) echo "${ARGUS_LOG_DIR}/install.log" ;;
     doctor) echo "${ARGUS_LOG_DIR}/doctor.log" ;;
+    repair) echo "${ARGUS_LOG_DIR}/repair.log" ;;
+    update) echo "${ARGUS_LOG_DIR}/update.log" ;;
     worker) echo "${ARGUS_LOG_DIR}/worker.log" ;;
     scanner) echo "${ARGUS_LOG_DIR}/scanner.log" ;;
     *) echo "${ARGUS_LOG_DIR}/runtime.log" ;;

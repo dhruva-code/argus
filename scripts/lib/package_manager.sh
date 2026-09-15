@@ -14,9 +14,15 @@ ARGUS_PACKAGE_MANAGER_SH_LOADED=1
 
 # The complete set of system packages Argus needs. Kept centralized here
 # rather than scattered across the codebase (§10).
+#
+# bind9-dnsutils (not "dnsutils"): "dnsutils" was historically a
+# transitional package that just depended on bind9-dnsutils, but newer
+# Ubuntu releases have dropped the transitional package entirely (no
+# installable candidate at all) — bind9-dnsutils is the real package that
+# actually provides dig/nslookup/host on every supported distro here.
 ARGUS_SYSTEM_PACKAGES=(
   curl wget git jq unzip zip tar make gcc g++ pkg-config
-  build-essential ca-certificates dnsutils net-tools
+  build-essential ca-certificates bind9-dnsutils net-tools
   python3 python3-venv python3-pip
 )
 

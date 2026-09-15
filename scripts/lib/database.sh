@@ -127,25 +127,49 @@ db_url() {
 }
 
 # db_start — bring Postgres up using whatever mechanism is available:
-# docker compose (preferred, matches the project's own dev convention) or a
-# native `systemctl start postgresql` if compose isn't in play.
+# docker compose (preferred, matches the project's own dev convention), a
+# native `systemctl start postgresql` if compose isn't in play, or — if
+# neither is even installed yet — a native apt install as a last resort so
+# declining/not-having Docker never leaves the app with no database at all.
 db_start() {
   step "Starting PostgreSQL"
   db_load_config
   if db_tcp_reachable; then
-    ok "postgres already reachable at ${DB_HOST}:${DB_PORT}"
-    return 0
+    # TCP up is not the same as "usable" — a Docker volume initialized by an
+    # earlier attempt with a different POSTGRES_PASSWORD keeps that old
+    # password forever regardless of what .env says now (the official
+    # postgres image only applies POSTGRES_PASSWORD on first init of an
+    # empty data directory). Catch that here instead of letting it surface
+    # three steps later as a raw psycopg traceback out of alembic.
+    if db_auth_ok; then
+      ok "postgres already reachable at ${DB_HOST}:${DB_PORT}"
+      return 0
+    fi
+    fail "postgres is reachable at ${DB_HOST}:${DB_PORT} but rejected the credentials in .env for user '${DB_USER}'"
+    warn "this almost always means an existing Postgres data volume was initialized with a DIFFERENT password than what's in .env now (e.g. a earlier partial/failed install attempt)."
+    warn "fix: ./repair.sh --reset-database   (recreates the database from .env's current credentials — safe on a fresh/broken install; destroys existing DB content, so back up first if this instance has real data)"
+    return 1
   fi
   if declare -F docker_detect >/dev/null 2>&1 && docker_detect; then
     info "starting postgres via docker compose…"
     if compose up -d postgres; then
-      db_wait_ready && return 0
+      db_wait_ready && { db_auth_ok || { fail "postgres started but authentication failed — see ./repair.sh --reset-database"; return 1; }; return 0; }
     fi
   fi
   if [[ "$OS_HAS_SYSTEMD" == "1" ]] && systemctl list-unit-files 2>/dev/null | grep -q '^postgresql'; then
     info "starting native postgresql via systemd…"
     sudo_run systemctl start postgresql
     db_wait_ready && return 0
+  fi
+  # Neither Docker nor an already-installed native postgresql is available —
+  # Docker may have been declined (docker_offer_install is interactive-only
+  # by design). Rather than leave the app with no database path at all, fall
+  # back to a native apt install; this is an unremarkable, expected server
+  # admin action (unlike Docker group membership) so it doesn't need the
+  # same explicit-confirmation gate.
+  if has_cmd apt-get; then
+    info "docker/postgresql not available — installing PostgreSQL natively via apt…"
+    db_install_native && db_wait_ready && return 0
   fi
   fail "could not start postgres automatically — start it manually (docker compose up -d postgres, or systemctl start postgresql) and re-run"
   return 1
@@ -179,6 +203,47 @@ db_install_native() {
   sudo_run -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" 2>/dev/null | grep -q 1 || \
     sudo_run -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
   ok "postgresql role/database ready"
+}
+
+# db_reset_database — DESTRUCTIVE. Recreates the database from .env's
+# current credentials, discarding whatever is currently stored. Exists
+# specifically for the stale-Docker-volume-password-mismatch scenario
+# db_start detects above (and equally for a native install whose role
+# password has drifted from .env). Never called automatically — only from
+# an explicit, confirm-gated caller (see repair.sh --reset-database).
+db_reset_database() {
+  step "Resetting PostgreSQL (destructive)"
+  db_load_config
+  if declare -F docker_detect >/dev/null 2>&1 && docker_detect; then
+    info "removing the postgres container and its data volume…"
+    ( cd "$ARGUS_ROOT" && $DOCKER_COMPOSE_CMD --env-file "$ARGUS_ENV_FILE" rm -sf postgres ) || true
+    ( cd "$ARGUS_ROOT" && $DOCKER_COMPOSE_CMD --env-file "$ARGUS_ENV_FILE" down -v --remove-orphans postgres 2>/dev/null ) || true
+    # `down -v` on a single service can leave the named volume behind on
+    # older compose versions — remove it explicitly by its compose-computed
+    # name so a stale password can never survive this reset.
+    local proj vol
+    proj="$(basename "$ARGUS_ROOT" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')"
+    vol="${proj}_pgdata"
+    docker volume rm -f "$vol" >/dev/null 2>&1 || true
+    info "recreating postgres from current .env credentials…"
+    compose up -d postgres || { fail "failed to recreate the postgres container"; return 1; }
+    db_wait_ready || { fail "postgres did not come back up after reset"; return 1; }
+    db_auth_ok || { fail "postgres still rejects .env credentials after a full volume reset — check POSTGRES_USER/POSTGRES_PASSWORD"; return 1; }
+    ok "postgres reset — now using the credentials currently in .env"
+    return 0
+  fi
+  if has_cmd psql; then
+    info "recreating native role/database '${DB_USER}'/'${DB_NAME}' from current .env credentials…"
+    sudo_run -u postgres psql -c "DROP DATABASE IF EXISTS ${DB_NAME};" || true
+    sudo_run -u postgres psql -c "DROP ROLE IF EXISTS ${DB_USER};" || true
+    sudo_run -u postgres psql -c "CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASSWORD}';"
+    sudo_run -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+    db_auth_ok || { fail "postgres still rejects .env credentials after role/database recreation"; return 1; }
+    ok "postgres role/database reset — now using the credentials currently in .env"
+    return 0
+  fi
+  fail "neither docker compose nor a native psql client is available — cannot reset automatically"
+  return 1
 }
 
 db_migrate() {

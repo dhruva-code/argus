@@ -60,11 +60,11 @@ docker_check() {
 docker_offer_install() {
   if has_cmd docker; then return 0; fi
   if [[ "$ARGUS_NON_INTERACTIVE" == "1" ]]; then
-    info "docker not installed — skipping (non-interactive mode; install manually if you want Docker mode)"
+    info "docker not installed — skipping (non-interactive mode); Postgres/Redis will be installed natively instead"
     return 0
   fi
-  if ! confirm "Docker is not installed. Install it now via apt (Docker Engine + Compose plugin)?" n; then
-    info "skipping Docker install — native mode remains fully supported"
+  if ! confirm "Docker is not installed. Install it now via apt (Docker Engine + Compose plugin)?" y; then
+    info "skipping Docker install — Postgres/Redis will be installed natively instead"
     return 0
   fi
   pkg_install ca-certificates curl gnupg

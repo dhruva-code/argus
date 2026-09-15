@@ -9,8 +9,11 @@ ARGUS_ALLOW_SEED, meant for local dev only), this creates a single real
 account meant to actually be used: no demo project, no fake scan history,
 no fake tool-health rows.
 
-The password is generated fresh on every run that creates or resets it —
-never hardcoded in source, never logged, printed to stdout exactly once.
+The password comes from ARGUS_DEFAULT_ADMIN_PASSWORD if set (install.sh
+sets this in .env so a fresh install ends with known, documented
+credentials instead of a one-time value only visible in that terminal's
+scrollback) — otherwise a fresh random one is generated on every run that
+creates or resets the account, never hardcoded in source, never logged.
 Change it (or enable MFA) after first login — see Settings -> Security.
 """
 
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import secrets
 import sys
 
@@ -35,6 +39,9 @@ DEFAULT_ADMIN_NAME = "Ashborn-admin"
 
 
 def _generate_password() -> str:
+    configured = os.getenv("ARGUS_DEFAULT_ADMIN_PASSWORD", "").strip()
+    if configured:
+        return configured
     # 24 URL-safe chars ~= 142 bits of entropy — well above the 12-char
     # minimum the rest of the platform enforces on user-chosen passwords.
     return secrets.token_urlsafe(18)
@@ -83,11 +90,17 @@ async def bootstrap(*, reset_password: bool = False) -> None:
         await session.commit()
 
     if password:
+        configured = bool(os.getenv("ARGUS_DEFAULT_ADMIN_PASSWORD", "").strip())
         print("")
         print("=" * 60)
-        print("  DEFAULT ADMIN CREDENTIALS — shown once, not stored anywhere")
+        print("  DEFAULT ADMIN CREDENTIALS")
         print(f"  Email:    {DEFAULT_ADMIN_EMAIL}")
         print(f"  Password: {password}")
+        if configured:
+            print("  (from ARGUS_DEFAULT_ADMIN_PASSWORD in .env — change it for any")
+            print("   production/internet-facing/multi-user deployment.)")
+        else:
+            print("  (freshly generated — shown once, not stored anywhere.)")
         print("  Change this (Settings -> Security) after first login.")
         print("=" * 60)
 

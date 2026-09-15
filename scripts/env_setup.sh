@@ -38,6 +38,17 @@ _gen_password() {
   fi
 }
 
+# Predictable, documented defaults (matches POSTGRES_USER=argus already in
+# .env.example) — deliberately NOT random. A self-hosted single-operator
+# tool where the installer and the operator are the same person gains far
+# more from "the credentials are always argus/argus, written down in the
+# README" than from a random value that, once lost, means diagnosing a
+# real bug (a stale Docker volume, a genuine misconfiguration) looks
+# identical to "I don't remember what I generated." Anyone deploying this
+# somewhere less trusted should change both immediately — see README.
+ARGUS_DEFAULT_DB_PASSWORD="argus"
+ARGUS_DEFAULT_ADMIN_PASSWORD_VALUE="argus"
+
 # _env_set <file> <key> <value> — in-place substitution of a `KEY=...` line.
 # Escapes the replacement for sed safely (values are hex/base64, but be safe
 # regardless — this touches a secrets file).
@@ -68,7 +79,7 @@ env_setup_run() {
   chmod 600 "$ARGUS_ENV_FILE"
 
   local db_pass jwt_secret orch_token fernet_key minio_secret
-  db_pass="$(_gen_password)"
+  db_pass="$ARGUS_DEFAULT_DB_PASSWORD"
   jwt_secret="$(_gen_hex32)"
   orch_token="$(_gen_hex32)"
   fernet_key="$(_gen_fernet_key)"
@@ -80,6 +91,17 @@ env_setup_run() {
   _env_set "$ARGUS_ENV_FILE" SECRET_ENCRYPTION_KEY "$fernet_key"
   _env_set "$ARGUS_ENV_FILE" ORCH_INTERNAL_TOKEN "$orch_token"
   _env_set "$ARGUS_ENV_FILE" S3_SECRET_KEY "$minio_secret"
+  if grep -q '^ARGUS_DEFAULT_ADMIN_PASSWORD=' "$ARGUS_ENV_FILE" 2>/dev/null; then
+    _env_set "$ARGUS_ENV_FILE" ARGUS_DEFAULT_ADMIN_PASSWORD "$ARGUS_DEFAULT_ADMIN_PASSWORD_VALUE"
+  else
+    {
+      echo ""
+      echo "# Default web-login password for the bootstrap admin account"
+      echo "# (ashborn-admin@ashborn.local). Predictable on purpose — see"
+      echo "# POSTGRES_PASSWORD above. Change after first login."
+      echo "ARGUS_DEFAULT_ADMIN_PASSWORD=${ARGUS_DEFAULT_ADMIN_PASSWORD_VALUE}"
+    } >>"$ARGUS_ENV_FILE"
+  fi
 
   if [[ "$profile" == "production" ]]; then
     _env_set "$ARGUS_ENV_FILE" ARGUS_ENV "production"
