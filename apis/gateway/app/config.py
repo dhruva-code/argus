@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, alias="ARGUS_API_PORT")
     cors_origins: str = Field(default="http://localhost:3000", alias="ARGUS_CORS_ORIGINS")
 
-    allow_setup: bool = Field(default=True, alias="ARGUS_ALLOW_SETUP")
     allow_seed: bool = Field(default=False, alias="ARGUS_ALLOW_SEED")
 
     orch_internal_token: str = Field(default="", alias="ORCH_INTERNAL_TOKEN")

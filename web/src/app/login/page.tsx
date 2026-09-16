@@ -3,7 +3,7 @@
 import { Button, Card, Input, Label } from "@/components/ui";
 import { api, setTokens } from "@/lib/api";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,12 +13,6 @@ export default function LoginPage() {
   const [needsMfa, setNeedsMfa] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api<{ setup_required: boolean }>("/auth/setup-required")
-      .then((r) => r.setup_required && router.replace("/setup"))
-      .catch(() => {});
-  }, [router]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -76,14 +70,9 @@ export default function LoginPage() {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
         </form>
-        <div className="mt-4 flex justify-between text-xs text-muted">
-          <a href="/forgot-password" className="hover:text-fg">
-            Forgot password?
-          </a>
-          <a href="/register" className="hover:text-fg">
-            Create an account
-          </a>
-        </div>
+        <p className="mt-4 text-center text-[11px] text-muted">
+          Single bootstrap admin account — see Settings → Security to change your password.
+        </p>
       </Card>
     </div>
   );

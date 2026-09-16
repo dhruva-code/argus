@@ -34,8 +34,8 @@ export default function AuditPage() {
         />
       </div>
       <p className="text-xs text-muted">
-        Append-only. Every mutation — scope changes, scans, tool config, role changes — is recorded
-        here and cannot be edited from the UI.
+        Append-only. Every mutation — scope changes, scans, tool config, account changes — is
+        recorded here and cannot be edited from the UI.
       </p>
 
       <Card>
@@ -44,7 +44,7 @@ export default function AuditPage() {
             <Spinner className="h-5 w-5" />
           </div>
         ) : error ? (
-          <EmptyState title="Not permitted" hint="Audit log access requires the Security Lead role or above." />
+          <EmptyState title="Couldn't load audit logs" hint="Check that the gateway API is reachable and try again." />
         ) : rows.length === 0 ? (
           <EmptyState title="No audit entries" />
         ) : (

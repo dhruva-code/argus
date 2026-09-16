@@ -1,10 +1,7 @@
-export type Role =
-  | "super_admin"
-  | "org_admin"
-  | "security_lead"
-  | "security_analyst"
-  | "researcher"
-  | "viewer";
+// Single-role model — every account is a super admin (see
+// apis/gateway/app/core/rbac.py). Kept as a union of one so OrgSummary.role/
+// Me.role stay typed the same as the API response shape.
+export type Role = "super_admin";
 
 export interface OrgSummary {
   id: string;

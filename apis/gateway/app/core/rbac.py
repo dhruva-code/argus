@@ -1,10 +1,20 @@
-"""Role → permission matrix and FastAPI dependencies enforcing it."""
+"""Permissions.
+
+Single-role model: every account is a super admin (app.models.Role has
+exactly one member) and holds every permission — there is no matrix to
+look up. permissions_for/has_permission keep their existing signatures
+(role, is_superuser kwarg included) purely so every call site across
+deps.py/auth.py/routers stays unchanged; the role/is_superuser arguments
+are accepted but no longer change the result.
+"""
 
 from __future__ import annotations
 
 from app.models import Role
 
-# Fine-grained permissions (spec §28).
+# Fine-grained permission names, still enforced at each endpoint via
+# Principal.require()/require_permission() — only the "which roles get
+# which of these" matrix has been removed, not the checks themselves.
 PERMISSIONS = [
     "project.read",
     "project.write",
@@ -22,44 +32,10 @@ PERMISSIONS = [
     "auth_profile.manage",
 ]
 
-_VIEWER = {"project.read", "finding.read"}
-_RESEARCHER = _VIEWER | {"scan.execute", "report.generate"}
-_ANALYST = _RESEARCHER | {
-    "project.write",
-    "scope.write",
-    "scan.cancel",
-    "finding.modify",
-    "auth_profile.manage",
-}
-_LEAD = _ANALYST | {"tool.configure", "audit.read"}
-_ORG_ADMIN = _LEAD | {"settings.modify", "org.manage", "user.manage"}
-_SUPER = set(PERMISSIONS)
 
-ROLE_PERMISSIONS: dict[Role, set[str]] = {
-    Role.viewer: _VIEWER,
-    Role.researcher: _RESEARCHER,
-    Role.security_analyst: _ANALYST,
-    Role.security_lead: _LEAD,
-    Role.org_admin: _ORG_ADMIN,
-    Role.super_admin: _SUPER,
-}
-
-# Role rank for "at least this role" checks.
-ROLE_RANK: dict[Role, int] = {
-    Role.viewer: 0,
-    Role.researcher: 1,
-    Role.security_analyst: 2,
-    Role.security_lead: 3,
-    Role.org_admin: 4,
-    Role.super_admin: 5,
-}
+def permissions_for(role: Role | None = None, *, is_superuser: bool = False) -> set[str]:  # noqa: ARG001
+    return set(PERMISSIONS)
 
 
-def permissions_for(role: Role, *, is_superuser: bool = False) -> set[str]:
-    if is_superuser:
-        return set(PERMISSIONS)
-    return set(ROLE_PERMISSIONS.get(role, set()))
-
-
-def has_permission(role: Role, permission: str, *, is_superuser: bool = False) -> bool:
-    return permission in permissions_for(role, is_superuser=is_superuser)
+def has_permission(role: Role | None = None, permission: str = "", *, is_superuser: bool = False) -> bool:  # noqa: ARG001
+    return permission in PERMISSIONS

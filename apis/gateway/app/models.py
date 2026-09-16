@@ -64,12 +64,12 @@ class TimestampMixin:
 
 
 class Role(enum.StrEnum):
+    # Single-role model: every account is a super admin — see
+    # app/core/rbac.py. Kept as an enum (rather than removed outright) so
+    # Membership.role, MeResponse.role, and every existing "role" reference
+    # across the API/frontend keep working without a wider schema change;
+    # there is simply nothing left for it to vary between.
     super_admin = "super_admin"
-    org_admin = "org_admin"
-    security_lead = "security_lead"
-    security_analyst = "security_analyst"
-    researcher = "researcher"
-    viewer = "viewer"
 
 
 class ScopeEffect(enum.StrEnum):
@@ -230,15 +230,13 @@ class User(Base, TimestampMixin):
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Account/profile (finalization pass)
-    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    email_verify_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    email_verify_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    pending_email: Mapped[str | None] = mapped_column(
-        String(320), nullable=True
-    )  # set on change-email until re-verified
-    password_reset_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Account/profile. email_verified is always true in practice now — the
+    # only account is the bootstrap admin, created pre-verified; the
+    # self-registration flow that used to set this false (and the
+    # verification-token/password-reset-token columns that went with it)
+    # has been removed along with public registration and forgot-password
+    # (single-admin model — see app/core/rbac.py, app/bootstrap_admin.py).
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     language: Mapped[str] = mapped_column(String(16), default="en")
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -254,7 +252,7 @@ class Membership(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
-    role: Mapped[Role] = mapped_column(Enum(Role), default=Role.viewer, nullable=False)
+    role: Mapped[Role] = mapped_column(Enum(Role), default=Role.super_admin, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="memberships")
     org: Mapped[Organization] = relationship(back_populates="members")

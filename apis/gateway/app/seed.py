@@ -35,8 +35,6 @@ from app.seed_profiles import ensure_builtin_profiles
 from app.tool_catalog import CATALOG
 
 DEMO_ADMIN = ("admin@demo.argus.test", "argus-demo-admin-1")
-DEMO_ANALYST = ("analyst@demo.argus.test", "argus-demo-analyst-1")
-DEMO_VIEWER = ("viewer@demo.argus.test", "argus-demo-viewer-1")
 
 
 async def _user(session, email: str, password: str, name: str, *, superuser=False) -> User:
@@ -68,18 +66,11 @@ async def seed() -> None:
             await session.flush()
 
         admin = await _user(session, *DEMO_ADMIN, "Demo Admin", superuser=True)
-        analyst = await _user(session, *DEMO_ANALYST, "Demo Analyst")
-        viewer = await _user(session, *DEMO_VIEWER, "Demo Viewer")
-        for u, role in (
-            (admin, Role.org_admin),
-            (analyst, Role.security_analyst),
-            (viewer, Role.viewer),
-        ):
-            m = await session.scalar(
-                select(Membership).where(Membership.user_id == u.id, Membership.org_id == org.id)
-            )
-            if m is None:
-                session.add(Membership(user_id=u.id, org_id=org.id, role=role))
+        m = await session.scalar(
+            select(Membership).where(Membership.user_id == admin.id, Membership.org_id == org.id)
+        )
+        if m is None:
+            session.add(Membership(user_id=admin.id, org_id=org.id, role=Role.super_admin))
 
         await ensure_builtin_profiles(session, org.id)
 
@@ -195,7 +186,7 @@ async def seed() -> None:
                     type=jtype,
                     status=jstatus,
                     params={},
-                    created_by=analyst.id,
+                    created_by=admin.id,
                     worker="orch-demo",
                     result_count=results,
                     started_at=created,
@@ -214,9 +205,7 @@ async def seed() -> None:
         await session.commit()
 
     print("Seed complete.")
-    print(f"  Admin   : {DEMO_ADMIN[0]} / {DEMO_ADMIN[1]}")
-    print(f"  Analyst : {DEMO_ANALYST[0]} / {DEMO_ANALYST[1]}")
-    print(f"  Viewer  : {DEMO_VIEWER[0]} / {DEMO_VIEWER[1]}")
+    print(f"  Admin: {DEMO_ADMIN[0]} / {DEMO_ADMIN[1]}")
 
 
 if __name__ == "__main__":

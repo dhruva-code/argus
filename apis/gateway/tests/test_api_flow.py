@@ -1,26 +1,13 @@
-"""End-to-end API flow over ASGI: setup → project → scope → job → dashboard."""
+"""End-to-end API flow over ASGI: bootstrap admin → project → scope → job → dashboard."""
 
 from __future__ import annotations
-
-
-async def test_setup_is_single_use(client):
-    body = {
-        "org_name": "Acme",
-        "admin_email": "a@acme.test",
-        "admin_password": "supersecret123!",
-        "admin_name": "A",
-    }
-    r1 = await client.post("/api/auth/setup", json=body)
-    assert r1.status_code == 201
-    r2 = await client.post("/api/auth/setup", json=body)
-    assert r2.status_code == 409
 
 
 async def test_login_and_me(client, admin_client):
     r = await admin_client.get("/api/auth/me")
     assert r.status_code == 200
     me = r.json()
-    assert me["role"] == "org_admin"
+    assert me["role"] == "super_admin"
     assert "project.write" in me["permissions"]
     assert len(me["organizations"]) == 1
 
@@ -142,39 +129,12 @@ async def test_dashboard_shape(admin_client):
     assert len(d["jobs_over_time"]) == 14
 
 
-async def test_viewer_cannot_write(client):
-    await client.post(
-        "/api/auth/setup",
-        json={
-            "org_name": "Acme",
-            "admin_email": "admin@acme.test",
-            "admin_password": "supersecret123!",
-            "admin_name": "A",
-        },
-    )
-    login = await client.post(
-        "/api/auth/login", json={"email": "admin@acme.test", "password": "supersecret123!"}
-    )
-    admin_tok = login.json()["access_token"]
-    client.headers["Authorization"] = f"Bearer {admin_tok}"
-
-    await client.post(
-        "/api/orgs/members",
-        json={
-            "email": "viewer@acme.test",
-            "password": "viewerpass1234!",
-            "full_name": "V",
-            "role": "viewer",
-        },
-    )
-
-    login = await client.post(
-        "/api/auth/login", json={"email": "viewer@acme.test", "password": "viewerpass1234!"}
-    )
-    client.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
-
+async def test_unauthenticated_write_is_rejected(client):
+    # Single-role model — there is no restricted role to test against
+    # anymore (every account is a super admin, see app/core/rbac.py), but
+    # an unauthenticated request must still be rejected.
     r = await client.post("/api/projects", json={"name": "nope"})
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 async def test_tools_catalog_and_config(admin_client):
@@ -195,4 +155,3 @@ async def test_audit_trail_records_mutations(admin_client):
     assert r.status_code == 200
     actions = {row["action"] for row in r.json()}
     assert "project.create" in actions
-    assert "setup.complete" in actions

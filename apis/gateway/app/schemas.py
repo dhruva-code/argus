@@ -26,13 +26,6 @@ class ORMModel(BaseModel):
 # ── Auth ───────────────────────────────────────────────────────────────────
 
 
-class SetupRequest(BaseModel):
-    org_name: str = Field(min_length=2, max_length=200)
-    admin_email: Email
-    admin_password: str = Field(min_length=12, max_length=200)
-    admin_name: str = Field(default="", max_length=200)
-
-
 class LoginRequest(BaseModel):
     email: Email
     password: str
@@ -85,46 +78,15 @@ class MeResponse(ORMModel):
     permissions: list[str] = []
 
 
-# ── Registration / verification / password reset (§5-7) ────────────────────
-
-
-class RegisterRequest(BaseModel):
-    email: Email
-    password: str = Field(min_length=12, max_length=200)
-    full_name: str = Field(default="", max_length=200)
-    org_name: str = Field(default="", max_length=200)
-
-
-class RegisterResponse(BaseModel):
-    message: str
-    email: Email
-
-
-class VerifyEmailRequest(BaseModel):
-    token: str
-
-
-class ResendVerificationRequest(BaseModel):
-    email: Email
-
-
-class RequestPasswordResetRequest(BaseModel):
-    email: Email
-
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str = Field(min_length=12, max_length=200)
+# ── Account (§5-7) ───────────────────────────────────────────────────────
+#
+# No registration/verification/password-reset schemas — single bootstrap-
+# admin model (app/bootstrap_admin.py); see docs/AUTHENTICATION.md.
 
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(min_length=12, max_length=200)
-
-
-class ChangeEmailRequest(BaseModel):
-    new_email: Email
-    current_password: str
 
 
 class UpdateProfileRequest(BaseModel):

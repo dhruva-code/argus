@@ -1,5 +1,9 @@
-"""Registration + email verification + password reset + sessions + account
-deletion, and the per-user notification-preferences / Telegram-pairing API.
+"""Sessions / change-password / account deletion, and the per-user
+notification-preferences / Telegram-pairing API.
+
+No registration/email-verification/password-reset tests here — those
+flows were removed along with public registration (single bootstrap-admin
+model; see app/bootstrap_admin.py and app/routers/auth.py).
 """
 
 from __future__ import annotations
@@ -9,102 +13,40 @@ import uuid
 import pytest
 
 
-@pytest.fixture
-def captured_tokens(monkeypatch: pytest.MonkeyPatch) -> dict:
-    """Captures the raw verification/reset token instead of actually sending
-    email — there is no real SMTP server in the test environment, and the
-    token is one-way-hashed in the database (can't be recovered from there)."""
-    captured: dict[str, str] = {}
+async def _new_account(client, session_factory, *, password: str = "first-password-123"):  # noqa: S107
+    """Creates an account directly (the only way one exists now — see
+    tests/conftest.py's admin_client for the same pattern) and logs in for
+    real, returning (email, access_token)."""
+    from app.core import security
+    from app.models import Membership, Organization, Role, User
 
-    async def fake_send_verification(user, raw_token: str) -> None:
-        captured["verify_token"] = raw_token
-        captured["verify_email"] = user.email
+    email = f"acct-{uuid.uuid4().hex[:8]}@test.local"
+    async with session_factory() as session:
+        org = Organization(name="Acct Org", slug=f"acct-org-{uuid.uuid4().hex[:8]}")
+        session.add(org)
+        await session.flush()
+        user = User(
+            email=email,
+            full_name="Test User",
+            password_hash=security.hash_password(password),
+            is_superuser=True,
+            email_verified=True,
+        )
+        session.add(user)
+        await session.flush()
+        session.add(Membership(user_id=user.id, org_id=org.id, role=Role.super_admin))
+        await session.commit()
 
-    monkeypatch.setattr("app.routers.auth._send_verification_email", fake_send_verification)
-
-    class _FakeProvider:
-        def send(self, to, subject, body_text, body_html=None):
-            if "reset your" in subject.lower():
-                # extract the token from the reset link in the body
-                for tok in body_text.split():
-                    if "token=" in tok:
-                        captured["reset_token"] = tok.split("token=", 1)[1]
-            captured["last_to"] = to
-            captured["last_subject"] = subject
-
-    monkeypatch.setattr("app.routers.auth.get_email_provider", lambda: _FakeProvider())
-    monkeypatch.setattr("app.routers.settings.get_email_provider", lambda: _FakeProvider())
-    return captured
-
-
-@pytest.mark.asyncio
-async def test_register_verify_login_flow(client, captured_tokens):
-    email = f"newuser-{uuid.uuid4().hex[:8]}@proton.me"  # Proton address — must work like any other
-    r = await client.post(
-        "/api/auth/register",
-        json={"email": email, "password": "correct-horse-battery-1", "full_name": "New User"},
-    )
-    assert r.status_code == 201, r.text
-    assert captured_tokens["verify_email"] == email
-
-    # Cannot log in before verifying.
-    r = await client.post("/api/auth/login", json={"email": email, "password": "correct-horse-battery-1"})
-    assert r.status_code == 403, r.text
-
-    # Verify with the captured token.
-    r = await client.post("/api/auth/verify-email", json={"token": captured_tokens["verify_token"]})
+    r = await client.post("/api/auth/login", json={"email": email, "password": password})
     assert r.status_code == 200, r.text
-    assert "access_token" in r.json()
-
-    # Now login works.
-    r = await client.post("/api/auth/login", json={"email": email, "password": "correct-horse-battery-1"})
-    assert r.status_code == 200, r.text
-
-    # Bad/expired token is rejected, not silently accepted.
-    r = await client.post("/api/auth/verify-email", json={"token": "not-a-real-token"})
-    assert r.status_code == 400
+    return email, r.json()["access_token"]
 
 
 @pytest.mark.asyncio
-async def test_register_duplicate_email_does_not_leak_existence(client, captured_tokens):
-    email = f"dup-{uuid.uuid4().hex[:8]}@example.com"
-    r = await client.post("/api/auth/register", json={"email": email, "password": "correct-horse-battery-1"})
-    assert r.status_code == 201
+async def test_sessions_and_change_password(client):
+    from app.db import SessionLocal
 
-    r2 = await client.post("/api/auth/register", json={"email": email, "password": "another-password-1"})
-    assert r2.status_code == 201  # same generic response either way
-    assert "verification" in r2.json()["message"].lower()
-
-
-@pytest.mark.asyncio
-async def test_password_reset_flow(client, captured_tokens):
-    email = f"resetme-{uuid.uuid4().hex[:8]}@example.com"
-    await client.post("/api/auth/register", json={"email": email, "password": "original-password-1"})
-    await client.post("/api/auth/verify-email", json={"token": captured_tokens["verify_token"]})
-
-    r = await client.post("/api/auth/request-password-reset", json={"email": email})
-    assert r.status_code == 204
-    assert "reset_token" in captured_tokens
-
-    r = await client.post(
-        "/api/auth/reset-password",
-        json={"token": captured_tokens["reset_token"], "new_password": "brand-new-password-1"},
-    )
-    assert r.status_code == 200, r.text
-
-    # Old password no longer works; new one does.
-    r = await client.post("/api/auth/login", json={"email": email, "password": "original-password-1"})
-    assert r.status_code == 401
-    r = await client.post("/api/auth/login", json={"email": email, "password": "brand-new-password-1"})
-    assert r.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_sessions_and_change_password(client, captured_tokens):
-    email = f"sess-{uuid.uuid4().hex[:8]}@example.com"
-    r = await client.post("/api/auth/register", json={"email": email, "password": "first-password-123"})
-    r = await client.post("/api/auth/verify-email", json={"token": captured_tokens["verify_token"]})
-    token = r.json()["access_token"]
+    email, token = await _new_account(client, SessionLocal)
     client.headers["Authorization"] = f"Bearer {token}"
 
     r = await client.get("/api/auth/sessions")
@@ -119,14 +61,16 @@ async def test_sessions_and_change_password(client, captured_tokens):
 
     r = await client.post("/api/auth/login", json={"email": email, "password": "second-password-456"})
     assert r.status_code == 200
+    # old password no longer works
+    r = await client.post("/api/auth/login", json={"email": email, "password": "first-password-123"})
+    assert r.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_account_deletion_requires_correct_confirmation(client, captured_tokens):
-    email = f"delme-{uuid.uuid4().hex[:8]}@example.com"
-    await client.post("/api/auth/register", json={"email": email, "password": "delete-me-password-1"})
-    r = await client.post("/api/auth/verify-email", json={"token": captured_tokens["verify_token"]})
-    token = r.json()["access_token"]
+async def test_account_deletion_requires_correct_confirmation(client):
+    from app.db import SessionLocal
+
+    email, token = await _new_account(client, SessionLocal, password="delete-me-password-1")  # noqa: S106
     client.headers["Authorization"] = f"Bearer {token}"
 
     # Wrong confirmation text is rejected.
@@ -155,7 +99,12 @@ async def test_notification_preferences_roundtrip(admin_client):
 
     r = await admin_client.put(
         "/api/settings/notifications",
-        json={"telegram_enabled": True, "events": {"new_asset": True}, "quiet_hours_start": 23, "quiet_hours_end": 7},
+        json={
+            "telegram_enabled": True,
+            "events": {"new_asset": True},
+            "quiet_hours_start": 23,
+            "quiet_hours_end": 7,
+        },
     )
     assert r.status_code == 200, r.text
     updated = r.json()

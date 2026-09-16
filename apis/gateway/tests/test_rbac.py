@@ -1,34 +1,22 @@
-from app.core.rbac import ROLE_PERMISSIONS, has_permission, permissions_for
+"""Single-role model: every account holds every permission — see
+app/core/rbac.py's module docstring for why the matrix went away."""
+
+from app.core.rbac import PERMISSIONS, has_permission, permissions_for
 from app.models import Role
 
 
-def test_viewer_is_read_only():
-    perms = permissions_for(Role.viewer)
-    assert perms == {"project.read", "finding.read"}
-    assert not has_permission(Role.viewer, "scan.execute")
+def test_super_admin_gets_everything():
+    assert permissions_for(Role.super_admin) == set(PERMISSIONS)
 
 
-def test_permissions_are_monotonic_by_rank():
-    order = [
-        Role.viewer,
-        Role.researcher,
-        Role.security_analyst,
-        Role.security_lead,
-        Role.org_admin,
-        Role.super_admin,
-    ]
-    for lower, higher in zip(order, order[1:], strict=False):
-        assert ROLE_PERMISSIONS[lower] <= ROLE_PERMISSIONS[higher], (lower, higher)
+def test_has_permission_true_for_every_known_permission():
+    for p in PERMISSIONS:
+        assert has_permission(Role.super_admin, p)
 
 
-def test_superuser_gets_everything():
-    from app.core.rbac import PERMISSIONS
-
-    assert permissions_for(Role.viewer, is_superuser=True) == set(PERMISSIONS)
+def test_has_permission_false_for_unknown_permission():
+    assert not has_permission(Role.super_admin, "not.a.real.permission")
 
 
-def test_only_lead_and_up_configure_tools():
-    assert not has_permission(Role.security_analyst, "tool.configure")
-    assert has_permission(Role.security_lead, "tool.configure")
-    assert has_permission(Role.org_admin, "settings.modify")
-    assert not has_permission(Role.security_lead, "settings.modify")
+def test_only_one_role_exists():
+    assert list(Role) == [Role.super_admin]

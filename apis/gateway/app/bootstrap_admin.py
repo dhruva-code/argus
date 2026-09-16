@@ -1,6 +1,8 @@
-"""Creates the default operator account and organization.
+"""Creates the single bootstrap super-admin account and organization —
+the only way an Argus account is ever created (see docs/AUTHENTICATION.md;
+there is no public registration or invite flow).
 
-Run with:  python -m app.bootstrap_admin
+Run with:  python -m app.bootstrap_admin  (install.sh does this automatically)
 
 Idempotent — safe to re-run; does nothing if the account already exists
 (use --reset-password to rotate the password on an existing account
@@ -10,11 +12,13 @@ account meant to actually be used: no demo project, no fake scan history,
 no fake tool-health rows.
 
 The password comes from ARGUS_DEFAULT_ADMIN_PASSWORD if set (install.sh
-sets this in .env so a fresh install ends with known, documented
-credentials instead of a one-time value only visible in that terminal's
-scrollback) — otherwise a fresh random one is generated on every run that
-creates or resets the account, never hardcoded in source, never logged.
-Change it (or enable MFA) after first login — see Settings -> Security.
+sets this in .env — default "argus", so a fresh install ends with known,
+documented credentials instead of a one-time value only visible in that
+terminal's scrollback) — otherwise a fresh random one is generated on
+every run that creates or resets the account, never hardcoded in source,
+never logged. This is a bootstrap credential for initial setup, not a
+secure production password — change it (Settings -> Security -> Change
+Password, or enable MFA) immediately after first login.
 """
 
 from __future__ import annotations
@@ -32,10 +36,14 @@ from app.db import SessionLocal, create_all
 from app.models import Membership, Organization, Role, User
 from app.seed_profiles import ensure_builtin_profiles
 
-DEFAULT_ORG_NAME = "Ashborn"
-DEFAULT_ORG_SLUG = "ashborn"
-DEFAULT_ADMIN_EMAIL = "ashborn-admin@ashborn.local"
-DEFAULT_ADMIN_NAME = "Ashborn-admin"
+DEFAULT_ORG_NAME = "Argus"
+DEFAULT_ORG_SLUG = "argus"
+# Login is still email-shaped (app.core.types.Email requires it — see its
+# docstring on why .local is deliberately accepted), but argus@argus.local
+# is as close to a bare "argus" username as that allows while keeping the
+# existing, well-tested email-identified auth system unchanged.
+DEFAULT_ADMIN_EMAIL = "argus@argus.local"
+DEFAULT_ADMIN_NAME = "Argus Admin"
 
 
 def _generate_password() -> str:
@@ -85,7 +93,7 @@ async def bootstrap(*, reset_password: bool = False) -> None:
             select(Membership).where(Membership.user_id == user.id, Membership.org_id == org.id)
         )
         if membership is None:
-            session.add(Membership(user_id=user.id, org_id=org.id, role=Role.org_admin))
+            session.add(Membership(user_id=user.id, org_id=org.id, role=Role.super_admin))
 
         await session.commit()
 
@@ -93,22 +101,25 @@ async def bootstrap(*, reset_password: bool = False) -> None:
         configured = bool(os.getenv("ARGUS_DEFAULT_ADMIN_PASSWORD", "").strip())
         print("")
         print("=" * 60)
-        print("  DEFAULT ADMIN CREDENTIALS")
-        print(f"  Email:    {DEFAULT_ADMIN_EMAIL}")
-        print(f"  Password: {password}")
+        print("  ARGUS BOOTSTRAP ADMIN CREDENTIALS")
+        print(f"  Username (email): {DEFAULT_ADMIN_EMAIL}")
+        print(f"  Password:         {password}")
         if configured:
-            print("  (from ARGUS_DEFAULT_ADMIN_PASSWORD in .env — change it for any")
-            print("   production/internet-facing/multi-user deployment.)")
+            print("")
+            print("  This is a bootstrap credential for initial setup — it is NOT a")
+            print("  secure production password. Change it immediately after first")
+            print("  login (Settings -> Security -> Change Password), especially for")
+            print("  any shared/production/internet-facing deployment.")
         else:
             print("  (freshly generated — shown once, not stored anywhere.)")
-        print("  Change this (Settings -> Security) after first login.")
         print("=" * 60)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--reset-password", action="store_true",
+        "--reset-password",
+        action="store_true",
         help="Generate and set a new password for the existing default admin account.",
     )
     args = parser.parse_args()
