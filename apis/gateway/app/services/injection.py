@@ -109,15 +109,12 @@ async def injection_overview(session: AsyncSession, project_id: uuid.UUID) -> di
         ).all()
     )
     rows = (
-        (
-            await session.execute(
-                select(InjectionPoint.candidate_classes, InjectionPoint.tested_classes).where(
-                    InjectionPoint.project_id == project_id
-                )
+        await session.execute(
+            select(InjectionPoint.candidate_classes, InjectionPoint.tested_classes).where(
+                InjectionPoint.project_id == project_id
             )
         )
-        .all()
-    )
+    ).all()
     candidate_counts: dict[str, int] = {}
     tested_counts: dict[str, int] = {}
     for candidates, tested_classes in rows:

@@ -13,6 +13,7 @@
 #   ./install.sh --dev           dev-mode install (skips some hardening)
 #   ./install.sh --production    production-mode install
 #   ./install.sh --non-interactive   never prompt; safe defaults / env vars
+#   ./install.sh --no-ai         skip Ollama/Qwen (local AI is optional)
 #   ./install.sh --force         ignore hardware warnings, force reinstalls
 #   ./install.sh --no-color --quiet --verbose
 set -Eeuo pipefail
@@ -39,6 +40,7 @@ for arg in "$@"; do
     --dev) INSTALL_PROFILE="dev" ;;
     --production) INSTALL_PROFILE="production" ;;
     --non-interactive) ARGUS_NON_INTERACTIVE=1 ;;
+    --no-ai) ARGUS_SKIP_OLLAMA=1 ;;
     --force) ARGUS_FORCE=1 ;;
     --no-color) ARGUS_NO_COLOR=1 ;;
     --quiet) ARGUS_QUIET=1 ;;
@@ -50,7 +52,8 @@ for arg in "$@"; do
     *) warn "unknown flag: $arg (ignored)" ;;
   esac
 done
-export ARGUS_NON_INTERACTIVE ARGUS_FORCE ARGUS_NO_COLOR ARGUS_QUIET ARGUS_VERBOSE
+ARGUS_SKIP_OLLAMA="${ARGUS_SKIP_OLLAMA:-0}"
+export ARGUS_NON_INTERACTIVE ARGUS_FORCE ARGUS_NO_COLOR ARGUS_QUIET ARGUS_VERBOSE ARGUS_SKIP_OLLAMA
 
 # shellcheck source=scripts/lib/os_detection.sh
 source "${ARGUS_LIB_DIR}/os_detection.sh"
@@ -70,6 +73,8 @@ source "${ARGUS_LIB_DIR}/database.sh"
 source "${ARGUS_LIB_DIR}/redis.sh"
 # shellcheck source=scripts/lib/tools.sh
 source "${ARGUS_LIB_DIR}/tools.sh"
+# shellcheck source=scripts/lib/ollama.sh
+source "${ARGUS_LIB_DIR}/ollama.sh"
 # shellcheck source=scripts/lib/permissions.sh
 source "${ARGUS_LIB_DIR}/permissions.sh"
 
@@ -126,6 +131,7 @@ if [[ "$MODE" == "check" ]]; then
   go_check || true
   docker_check || true
   tools_check || true
+  ollama_check || true
   permissions_check || true
   echo ""
   info "run without --check to install/repair what's missing"
@@ -146,15 +152,18 @@ go_setup || true
 python_setup
 node_setup
 
-# ── .env ──────────────────────────────────────────────────────────────────
+# ── Application configuration (.env) ────────────────────────────────────
 # shellcheck source=scripts/env_setup.sh
 source "${SCRIPT_DIR}/scripts/env_setup.sh"
 env_setup_run "$INSTALL_PROFILE"
 
+# ── Security tools ───────────────────────────────────────────────────────
+tools_install_all
+
 # ── Docker (optional) ────────────────────────────────────────────────────
 docker_check >/dev/null 2>&1 || docker_offer_install
 
-# ── Backing services ─────────────────────────────────────────────────────
+# ── PostgreSQL / Redis ───────────────────────────────────────────────────
 # These now try docker compose, then a native systemd unit, then a native
 # apt install, in that order — a failure here means none of those worked,
 # which nothing downstream (migrations, the app itself) can do anything
@@ -163,10 +172,10 @@ docker_check >/dev/null 2>&1 || docker_offer_install
 db_start || die "postgres could not be started automatically — see the diagnostic above, or start it manually and re-run"
 redis_start || die "redis could not be started automatically — start it manually and re-run"
 
-# ── Database ──────────────────────────────────────────────────────────────
+# ── Database initialization + migrations ────────────────────────────────
 db_migrate || die "database migrations failed — see ${ARGUS_LOG_DIR}/install.log"
 
-# ── Default admin account ────────────────────────────────────────────────
+# ── Bootstrap admin ──────────────────────────────────────────────────────
 # Idempotent (does nothing if the account already exists) — ensures a fresh
 # install always ends with working, documented login credentials instead of
 # requiring a separate manual step. Uses ARGUS_DEFAULT_ADMIN_PASSWORD from
@@ -175,7 +184,7 @@ db_migrate || die "database migrations failed — see ${ARGUS_LOG_DIR}/install.l
 # PASSWORD are read via plain os.getenv/pydantic-settings' env_file (which
 # resolves ".env" relative to CWD, i.e. the gateway dir, not $ARGUS_ROOT) —
 # export them explicitly rather than relying on that, same as db_migrate.
-step "Default admin account"
+step "Bootstrap admin account"
 db_load_config
 (
   cd "$ARGUS_GATEWAY_DIR" &&
@@ -184,8 +193,18 @@ db_load_config
   "$ARGUS_VENV_DIR/bin/python" -m app.bootstrap_admin
 ) || warn "could not create the default admin account automatically — run manually: cd apis/gateway && .venv/bin/python -m app.bootstrap_admin"
 
-# ── Security tools ───────────────────────────────────────────────────────
-tools_install_all
+# ── Ollama / Qwen (local AI — optional) ─────────────────────────────────
+# Fully best-effort: never fails the install (see ollama.sh's module
+# docstring) — AI analysis always has a deterministic heuristic fallback.
+# Skippable with --no-ai or ARGUS_SKIP_OLLAMA=1 (e.g. constrained CI/VM
+# environments, or an operator who doesn't want a multi-GB model download).
+if [[ "${ARGUS_SKIP_OLLAMA:-0}" == "1" ]]; then
+  info "ARGUS_SKIP_OLLAMA=1 — skipping Ollama/Qwen setup"
+elif [[ "$ARGUS_NON_INTERACTIVE" == "1" ]] || confirm "Install/configure local AI (Ollama + Qwen)? A model download of 1-9GB, sized to your detected RAM." y; then
+  ollama_setup || warn "Ollama/Qwen setup did not complete — AI analysis will use the heuristic fallback (see docs/AI.md)"
+else
+  info "skipping Ollama/Qwen — AI analysis will use the heuristic fallback (install later: see docs/AI.md)"
+fi
 
 # ── Final validation ─────────────────────────────────────────────────────
 section "FINAL VALIDATION"
@@ -195,6 +214,7 @@ node_check || final_problems=1
 db_check || final_problems=1
 redis_check || final_problems=1
 tools_check || final_problems=1
+ollama_check || true   # optional — never counts toward final_problems
 permissions_check || true
 
 echo ""

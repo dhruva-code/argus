@@ -457,7 +457,7 @@ async def derive_from_port(session: AsyncSession, port) -> None:
     if not spec:
         return
     sev, desc = spec
-    host = (port.hostnames[0] if port.hostnames else port.ip)
+    host = port.hostnames[0] if port.hostnames else port.ip
     await _derive_finding(
         session,
         org_id=port.org_id,

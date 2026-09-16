@@ -4,10 +4,17 @@ AI analysis is **entirely optional** and **read-only** — it never triggers
 scans, changes scope, or executes anything, and the platform works
 identically with it disabled. Implementation: `apis/gateway/app/services/ai.py`.
 
+See [AI.md](AI.md) for how `install.sh` installs/configures Ollama + a
+Qwen model automatically (adaptive sizing based on detected RAM) and its
+own health checks (`doctor.sh --ollama`) — this document covers the
+AI-analysis *pipeline* (what gets analyzed, when, and how results are
+used) once a provider is configured, either that way or manually below.
+
 ## Configuring it
 
 **Settings → AI & Analysis** (org-level, requires the `settings.modify`
-permission — org_admin+):
+permission — held by every account in the single-role model, see
+[AUTHENTICATION.md](AUTHENTICATION.md)):
 
 - Enable/disable toggle.
 - Provider: `anthropic` (hosted) or `ollama` (local/self-hosted — no API

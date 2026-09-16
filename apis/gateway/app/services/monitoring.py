@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Asset, Finding, Port, ScanJob, Secret
 
 
-async def _last_two_recon_scans(session: AsyncSession, project_id: uuid.UUID) -> tuple[ScanJob | None, ScanJob | None]:
+async def _last_two_recon_scans(
+    session: AsyncSession, project_id: uuid.UUID
+) -> tuple[ScanJob | None, ScanJob | None]:
     rows = (
         (
             await session.execute(
@@ -46,7 +48,11 @@ def _aware(dt: datetime | None) -> datetime | None:
 
 
 def _asset_row(a: Asset) -> dict[str, Any]:
-    return {"type": a.type.value if hasattr(a.type, "value") else str(a.type), "value": a.value, "status": a.status.value if hasattr(a.status, "value") else str(a.status)}
+    return {
+        "type": a.type.value if hasattr(a.type, "value") else str(a.type),
+        "value": a.value,
+        "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+    }
 
 
 async def exposure_delta(
@@ -94,12 +100,16 @@ async def exposure_delta(
     new_f = [f for f in fnds if _new(f)]
     gone_f = [f for f in fnds if _gone(f)]
     result["new"]["findings"] = [
-        {"severity": f.severity.value, "name": f.name or f.template_id, "host": f.host, "status": f.status.value}
+        {
+            "severity": f.severity.value,
+            "name": f.name or f.template_id,
+            "host": f.host,
+            "status": f.status.value,
+        }
         for f in sorted(new_f, key=lambda f: f.confidence, reverse=True)
     ][:200]
     result["resolved"]["findings"] = [
-        {"severity": f.severity.value, "name": f.name or f.template_id, "host": f.host}
-        for f in gone_f
+        {"severity": f.severity.value, "name": f.name or f.template_id, "host": f.host} for f in gone_f
     ][:200]
 
     # ports & secrets (counts + samples)

@@ -252,9 +252,7 @@ async def delete_project_permanent(
     if body.confirm_name != project.name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "confirm_name does not match the project name")
     if project.deleted_at is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "project must be soft-deleted first — see POST /delete"
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, "project must be soft-deleted first — see POST /delete")
 
     counts = await project_svc.permanent_delete_project(session, project)
     await audit.record(

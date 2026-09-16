@@ -73,8 +73,14 @@ async def dispatch(project, event: str, title: str, lines: list[str], payload: d
         return
 
     text = f"*{title}*\n" + "\n".join(f"• {ln}" for ln in lines[:20])
-    full = {"project": project.name, "project_id": str(project.id), "event": event,
-            "title": title, "summary": lines, "data": payload}
+    full = {
+        "project": project.name,
+        "project_id": str(project.id),
+        "event": event,
+        "title": title,
+        "summary": lines,
+        "data": payload,
+    }
 
     if url := policy.get("slack_webhook"):
         await _post(url, {"text": text}, slack=True)
@@ -91,7 +97,8 @@ async def notify_scan_complete(session, project, job, delta: dict) -> None:
 
     counts = delta.get("counts", {})
     new_findings = [
-        f for f in delta.get("new", {}).get("findings", [])
+        f
+        for f in delta.get("new", {}).get("findings", [])
         if _SEV_RANK.get(f.get("severity", "info"), 0) >= min_rank
     ]
 

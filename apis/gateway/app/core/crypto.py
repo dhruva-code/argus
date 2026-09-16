@@ -74,7 +74,7 @@ def decrypt(token: str) -> str:
             raise ValueError("ciphertext was written by Vault Transit but Vault is not configured")
         client, key, mount = v
         resp = client.secrets.transit.decrypt_data(
-            name=key, ciphertext=token[len(_VAULT_PREFIX):], mount_point=mount
+            name=key, ciphertext=token[len(_VAULT_PREFIX) :], mount_point=mount
         )
         return base64.b64decode(resp["data"]["plaintext"]).decode()
     try:

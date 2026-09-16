@@ -87,3 +87,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/dependency-review-action@v4
+
+  # Validates every top-level/lib installer script parses cleanly and, where
+  # shellcheck is available, lints it — catches quoting/unbound-variable/
+  # portability mistakes before they reach a fresh install target.
+  shell-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n syntax check
+        run: |
+          set -e
+          for f in install.sh run.sh doctor.sh repair.sh update.sh scripts/*.sh scripts/lib/*.sh; do
+            echo "checking $f"
+            bash -n "$f"
+          done
+      - name: shellcheck
+        run: |
+          shellcheck -S warning \
+            install.sh run.sh doctor.sh repair.sh update.sh \
+            scripts/*.sh scripts/lib/*.sh || true
+        # informational for now (this codebase predates shellcheck adoption
+        # in CI) — bash -n above is the hard gate; shellcheck warnings are
+        # surfaced in the log without failing the build.
+
+  # Applies the full alembic migration chain against a real, empty Postgres
+  # from scratch — the same path a fresh install exercises — so a broken
+  # migration (bad SQL, a missing down_revision link, a Postgres-only
+  # statement with no SQLite/dialect guard) fails here, not on someone's
+  # server.
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: argus
+          POSTGRES_PASSWORD: argus
+          POSTGRES_DB: argus
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U argus -d argus"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install
+        working-directory: apis/gateway
+        run: pip install -e ".[dev]"
+      - name: Migrate from scratch
+        working-directory: apis/gateway
+        env:
+          DATABASE_URL: postgresql+psycopg://argus:argus@localhost:5432/argus
+        run: alembic upgrade head
+      - name: Verify head reached
+        working-directory: apis/gateway
+        env:
+          DATABASE_URL: postgresql+psycopg://argus:argus@localhost:5432/argus
+        run: |
+          current="$(alembic current | awk '{print $1}')"
+          head="$(alembic heads | awk '{print $1}')"
+          echo "current=$current head=$head"
+          test "$current" = "$head"

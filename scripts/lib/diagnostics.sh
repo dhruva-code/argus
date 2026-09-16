@@ -8,7 +8,7 @@ if [[ -n "${ARGUS_DIAGNOSTICS_SH_LOADED:-}" ]]; then return 0 2>/dev/null || exi
 ARGUS_DIAGNOSTICS_SH_LOADED=1
 
 : "${ARGUS_ROOT:?common.sh must be sourced first}"
-for _m in os_detection package_manager python node go docker database redis tools \
+for _m in os_detection package_manager python node go docker database redis tools ollama \
           permissions services health performance; do
   # shellcheck disable=SC1090
   source "${ARGUS_LIB_DIR}/${_m}.sh"
@@ -63,6 +63,9 @@ diagnostics_run() {
       ;;&
     all|tools)
       _diag_run "Tool Version" tools_check
+      ;;&
+    all|ollama)
+      ollama_check || true   # optional component — never fails the run, same as docker (§39)
       ;;&
     all|permissions)
       _diag_run "Permission" permissions_check

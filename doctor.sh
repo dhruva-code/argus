@@ -9,7 +9,7 @@
 #   ./doctor.sh --fix           safe automatic repair pass, then re-checks
 #   ./doctor.sh --deep          --check plus a performance snapshot + recent errors
 #   ./doctor.sh --report        writes a sanitized diagnostic archive
-#   ./doctor.sh --tools --workers --database --network --permissions
+#   ./doctor.sh --tools --workers --database --ollama --network --permissions
 #   ./doctor.sh --performance --logs
 set -Eeuo pipefail
 
@@ -39,6 +39,7 @@ for arg in "$@"; do
     --tools) SCOPE="tools" ;;
     --workers) SCOPE="workers" ;;
     --database) SCOPE="database" ;;
+    --ollama) SCOPE="ollama" ;;
     --network) SCOPE="network" ;;
     --permissions) SCOPE="permissions" ;;
     --performance) SCOPE="performance" ;;

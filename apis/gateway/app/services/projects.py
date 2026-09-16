@@ -88,9 +88,7 @@ async def _stop_active_jobs(session: AsyncSession, project_id: uuid.UUID) -> int
     rows = (
         (
             await session.execute(
-                select(ScanJob).where(
-                    ScanJob.project_id == project_id, ScanJob.status.in_(_NON_TERMINAL)
-                )
+                select(ScanJob).where(ScanJob.project_id == project_id, ScanJob.status.in_(_NON_TERMINAL))
             )
         )
         .scalars()
@@ -126,9 +124,7 @@ async def permanent_delete_project(session: AsyncSession, project: Project) -> d
     # every job's redis keys, not just the ones that were still active —
     # completed jobs can still have a stale wire payload/checkpoint key.
     job_ids = (
-        (await session.execute(select(ScanJob.id).where(ScanJob.project_id == project.id)))
-        .scalars()
-        .all()
+        (await session.execute(select(ScanJob.id).where(ScanJob.project_id == project.id))).scalars().all()
     )
     for jid in job_ids:
         await purge_job_keys(str(jid))

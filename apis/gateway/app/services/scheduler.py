@@ -36,8 +36,11 @@ def enabled() -> bool:
 
 async def _due_projects(session) -> list[Project]:
     rows = (
-        (await session.execute(select(Project).where(Project.schedule_cron.is_not(None),
-                                                     Project.is_archived.is_(False))))
+        (
+            await session.execute(
+                select(Project).where(Project.schedule_cron.is_not(None), Project.is_archived.is_(False))
+            )
+        )
         .scalars()
         .all()
     )
@@ -74,26 +77,30 @@ async def _run_once() -> None:
         for project in due:
             # skip if a scan is already active for this project
             active = await session.scalar(
-                select(ScanJob.id).where(
+                select(ScanJob.id)
+                .where(
                     ScanJob.project_id == project.id,
                     ScanJob.status.in_([JobStatus.queued, JobStatus.running]),
-                ).limit(1)
+                )
+                .limit(1)
             )
             if active:
                 continue
             try:
                 # profile_key=None → plan_recon_scan falls back to the project's
                 # default profile
-                params, rate_limits = await scans.plan_recon_scan(
-                    session, project, profile_key=None
-                )
+                params, rate_limits = await scans.plan_recon_scan(session, project, profile_key=None)
             except scans.ReconPlanError as exc:
                 log.info("scheduled scan for %s skipped: %s", project.name, exc)
                 continue
             params["scheduled"] = True
             job = await scans.create_scan_job(
-                session, project=project, job_type="recon.scan",
-                params=params, rate_limits=rate_limits, created_by=None,
+                session,
+                project=project,
+                job_type="recon.scan",
+                params=params,
+                rate_limits=rate_limits,
+                created_by=None,
             )
             await session.commit()
             await scans.enqueue(session, job)
@@ -112,14 +119,18 @@ async def run_retention_sweep() -> dict[str, int]:
             audit_cut = datetime.now(UTC) - timedelta(days=max(1, org.retention_audit_days))
 
             old_jobs = (
-                await session.execute(
-                    select(ScanJob.id).where(
-                        ScanJob.org_id == org.id,
-                        ScanJob.finished_at.is_not(None),
-                        ScanJob.finished_at < raw_cut,
+                (
+                    await session.execute(
+                        select(ScanJob.id).where(
+                            ScanJob.org_id == org.id,
+                            ScanJob.finished_at.is_not(None),
+                            ScanJob.finished_at < raw_cut,
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if old_jobs:
                 r = await session.execute(sa_delete(JobEvent).where(JobEvent.job_id.in_(old_jobs)))
                 removed["job_events"] += r.rowcount or 0

@@ -23,6 +23,8 @@ source "${ARGUS_LIB_DIR}/database.sh"
 source "${ARGUS_LIB_DIR}/redis.sh"
 # shellcheck source=./tools.sh
 source "${ARGUS_LIB_DIR}/tools.sh"
+# shellcheck source=./ollama.sh
+source "${ARGUS_LIB_DIR}/ollama.sh"
 # shellcheck source=./permissions.sh
 source "${ARGUS_LIB_DIR}/permissions.sh"
 # shellcheck source=./services.sh
@@ -79,6 +81,7 @@ doctor_repair_all() {
   [[ -x "$ARGUS_VENV_PY" ]] || python_repair
   [[ -d "${ARGUS_WEB_DIR}/node_modules" ]] || node_repair
   tools_repair
+  ollama_repair
   repair_stale_pids
   repair_runtime_tmp
   repair_python_cache

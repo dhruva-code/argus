@@ -1,0 +1,23 @@
+# .gitleaks.toml — gitleaks config for this repo (public on GitHub).
+#
+# Extends the default gitleaks ruleset. The allowlist below covers ONLY
+# fake, non-functional secret-shaped strings used as fixtures in tests that
+# specifically exercise this app's own secret-detection/redaction logic
+# (e.g. "does the redaction regex actually strip an Anthropic-shaped key
+# out of a log line"). Real secrets must never be added here — see
+# SECURITY.md for the incident process if one is ever found.
+title = "argus"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-fake secret fixtures in the test suite"
+paths = [
+  '''apis/gateway/tests/test_ai_triage\.py''',
+  '''apis/gateway/tests/test_ai_report_settings\.py''',
+]
+regexes = [
+  '''AKIAIOSFODNN7REALISH''',
+  '''sk-ant-abc123''',
+]

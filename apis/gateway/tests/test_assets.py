@@ -222,7 +222,7 @@ async def test_endpoint_dedup_by_normalized_url(db_session):
 
 
 async def test_validated_only_filters_to_current_live_status(admin_client):
-    """"Project -> Endpoints" shows only endpoints whose *current* (latest-
+    """ "Project -> Endpoints" shows only endpoints whose *current* (latest-
     probed) response is 200/301/302/303/307/401 — not 403/404/5xx dead ends,
     and not endpoints that were only ever passively discovered and never
     actually HTTP-probed (status_code IS NULL, e.g. Wayback-only URLs)."""
@@ -267,7 +267,12 @@ async def test_validated_only_filters_to_current_live_status(admin_client):
     # without the filter, everything (including unprobed/dead-end) is visible
     r2 = await admin_client.get(f"/api/projects/{pid}/endpoints?limit=100")
     assert {e["path"] for e in r2.json()} == {
-        "/ok", "/redirect", "/login", "/missing", "/broken", "/never-probed",
+        "/ok",
+        "/redirect",
+        "/login",
+        "/missing",
+        "/broken",
+        "/never-probed",
     }
 
     summary = (await admin_client.get(f"/api/projects/{pid}/endpoints/summary")).json()

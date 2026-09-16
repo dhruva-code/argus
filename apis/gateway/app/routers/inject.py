@@ -96,7 +96,9 @@ async def list_injection_points(
     return [InjectionPointOut.model_validate(r) for r in rows]
 
 
-@router.post("/injection-points/{point_id}/retest", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/injection-points/{point_id}/retest", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED
+)
 async def retest_injection_point(
     project_id: uuid.UUID,
     point_id: uuid.UUID,

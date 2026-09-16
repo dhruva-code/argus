@@ -48,6 +48,11 @@ git clone <repo-url> Argus && cd Argus
 ./run.sh
 ```
 
+`install.sh` also installs/configures Ollama + a Qwen model (skip with
+`--no-ai`) and creates the bootstrap admin account automatically — see
+[INSTALL.md](INSTALL.md) and [AI.md](AI.md). There is no setup wizard;
+log in with the printed bootstrap credentials.
+
 ## Known considerations
 
 - Parrot's package versions can lag or lead Debian stable depending on the

@@ -279,10 +279,10 @@ async def delete_scans(
 
     if purge_data:
         asset_ids = (
-            await session.execute(
-                select(Asset.id).where(Asset.first_seen_scan.in_(job_ids))
-            )
-        ).scalars().all()
+            (await session.execute(select(Asset.id).where(Asset.first_seen_scan.in_(job_ids))))
+            .scalars()
+            .all()
+        )
         if asset_ids:
             for child in (AssetSource, AssetEdge):
                 cond = (
@@ -292,18 +292,14 @@ async def delete_scans(
                 )
                 await session.execute(sa_delete(child).where(cond))
         for model in _SCAN_SCOPED_MODELS:
-            res = await session.execute(
-                sa_delete(model).where(model.first_seen_scan.in_(job_ids))
-            )
+            res = await session.execute(sa_delete(model).where(model.first_seen_scan.in_(job_ids)))
             if res.rowcount:
                 purged[model.__tablename__] = res.rowcount
     else:
         # keep the inventory but drop the dangling scan reference
         for model in _SCAN_SCOPED_MODELS:
             await session.execute(
-                sa_update(model)
-                .where(model.first_seen_scan.in_(job_ids))
-                .values(first_seen_scan=None)
+                sa_update(model).where(model.first_seen_scan.in_(job_ids)).values(first_seen_scan=None)
             )
 
     await session.execute(sa_delete(JobEvent).where(JobEvent.job_id.in_(job_ids)))

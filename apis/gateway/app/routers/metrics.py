@@ -55,9 +55,7 @@ async def metrics(session: AsyncSession = Depends(get_session)) -> PlainTextResp
     G_PROJECTS.set(await session.scalar(select(func.count(Project.id))) or 0)
     G_ACTIVE_JOBS.set(
         await session.scalar(
-            select(func.count(ScanJob.id)).where(
-                ScanJob.status.in_([JobStatus.queued, JobStatus.running])
-            )
+            select(func.count(ScanJob.id)).where(ScanJob.status.in_([JobStatus.queued, JobStatus.running]))
         )
         or 0
     )
@@ -100,9 +98,7 @@ async def project_analytics(
     since = datetime.now(UTC) - timedelta(days=days)
 
     findings = (
-        (await session.execute(select(Finding).where(Finding.project_id == project_id)))
-        .scalars()
-        .all()
+        (await session.execute(select(Finding).where(Finding.project_id == project_id))).scalars().all()
     )
     # mean time-to-triage for findings that left the auto states
     triaged = [
@@ -130,9 +126,7 @@ async def project_analytics(
         .all()
     )
     durations = [
-        (s.finished_at - s.started_at).total_seconds() / 60
-        for s in scans
-        if s.started_at and s.finished_at
+        (s.finished_at - s.started_at).total_seconds() / 60 for s in scans if s.started_at and s.finished_at
     ]
 
     top_templates: dict[str, int] = {}
@@ -160,7 +154,6 @@ async def project_analytics(
         "riskiest_hosts": sorted(top_hosts.items(), key=lambda kv: -kv[1])[:10],
         "noisiest_templates": sorted(top_templates.items(), key=lambda kv: -kv[1])[:10],
         "verification_mix": {
-            v: sum(1 for f in findings if f.verification == v)
-            for v in {f.verification for f in findings}
+            v: sum(1 for f in findings if f.verification == v) for v in {f.verification for f in findings}
         },
     }

@@ -1,5 +1,102 @@
 # Changelog
 
+## Unreleased — Single-role auth, hardened fresh install, Ollama/Qwen in install.sh
+
+Public-repository hardening pass: an installer bug report (fresh Ubuntu
+Server ending with a Redis/Postgres authentication failure and several
+security tools never getting installed) plus a full authentication-model
+simplification for this project's actual deployment shape — one operator,
+one instance.
+
+### Changed — authentication simplified to a single bootstrap admin
+
+- **Removed public registration, the first-run `/setup` wizard,
+  admin-invite/role-assignment, and forgot-password entirely** —
+  `POST /api/auth/register|verify-email|resend-verification|
+  request-password-reset|reset-password|change-email`,
+  `GET /api/auth/setup-required`, `POST /api/auth/setup`,
+  `POST/PATCH /api/orgs/members`, and their frontend pages
+  (`/register`, `/setup`, `/forgot-password`, `/reset-password`,
+  `/verify-email`) are gone. The only way an account is ever created now
+  is `python -m app.bootstrap_admin` (run automatically by
+  `install.sh`) — see [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
+- **Collapsed the 6-role RBAC matrix down to one role**
+  (`super_admin`, holding every permission) — `app/core/rbac.py`,
+  migration `0015_single_role_bootstrap_admin`. Every existing account
+  is migrated to the new role automatically.
+- **New bootstrap credentials**: `argus@argus.local` / `argus` by
+  default (configurable via `ARGUS_DEFAULT_ADMIN_PASSWORD` in `.env`,
+  which `install.sh` now sets on a fresh install) — a deliberately
+  predictable, documented default for a self-hosted single-operator
+  tool, **not a secure production password**; change it immediately
+  after first login.
+- **Login rate limiting** — 10 failed attempts / 15 minutes, keyed by
+  source IP (`app/core/ratelimit.py`, Redis-backed, fails open if Redis
+  itself is down), plus `auth.login`/`auth.login_failed` audit-log
+  entries for every attempt. Added specifically because the bootstrap
+  account's identity is now fixed and publicly documented.
+- `POSTGRES_PASSWORD` also now defaults to `argus` (was a random hex
+  string) on a fresh install/`.env.example` — matching
+  `POSTGRES_USER=argus`, for the same "self-hosted single operator"
+  reasoning.
+
+### Fixed — fresh-install database/Redis provisioning
+
+- **Root cause of "postgres already reachable" immediately followed by a
+  password-authentication traceback**: `db_start`/`redis_start` treated
+  TCP-reachable as good enough and reported success without checking
+  authentication — a Docker volume from an earlier partial install
+  attempt (initialized with a different password) stays reachable but
+  permanently rejects whatever `.env` says later, since the official
+  Postgres image only applies `POSTGRES_PASSWORD` on first init of an
+  *empty* volume. Both now verify real auth and give a specific
+  diagnostic pointing at the cause and the fix instead of a cryptic
+  traceback three steps later.
+- **`db_install_native`/`redis_install_native` existed but were never
+  called** — if Docker wasn't installed (or its install prompt, which
+  defaulted to "no", was declined), there was no path to provision
+  Postgres/Redis at all. Wired in as a genuine fallback; the Docker
+  prompt now defaults to "yes".
+- **`dnsutils`** is a transitional package Ubuntu has fully dropped on
+  newer releases (no installable candidate) — replaced with
+  `bind9-dnsutils`, the package that actually exists and provides
+  `dig`/`nslookup`/`host`.
+- `install.sh`'s `db_start`/`redis_start` failures now correctly `die`
+  instead of `warn`-and-continue, since both now have real fallback
+  paths and a failure past that point means the app genuinely cannot
+  work — better to stop loudly than "finish" silently broken.
+
+### Added
+
+- **`repair.sh`** — new top-level entry point: safe automatic repairs by
+  default (stale pid files, cache dirs, restarting a down service,
+  reinstalling a missing/outdated tool, Ollama), plus explicit,
+  confirm-gated `--reset-database`/`--reset-redis` for the
+  credential-mismatch scenario above (never run automatically — this
+  project's repair philosophy never wipes data without being told to).
+- **`update.sh`** — pulls the latest commits and applies them in place
+  (rebuilds only what changed — Python/Node deps, the orchestrator
+  binary, the web build — then migrates and restarts), instead of
+  re-cloning/re-installing. Backs up first, refuses to run over
+  uncommitted changes without stashing them, refuses a diverged/
+  non-fast-forward pull.
+- **Ollama + Qwen installation, wired into `install.sh`**
+  (`scripts/lib/ollama.sh`): installs Ollama if missing, starts the
+  service, picks a Qwen 2.5 model size based on *detected RAM*
+  (confirmed empirically that a 14B model OOMs on a 4-core/7.2GB host —
+  see [docs/AI.md](docs/AI.md) for the sizing table), pulls it, and runs
+  a real inference call (not just a connectivity ping) to confirm it
+  actually works on this host before reporting success. Fully optional
+  (`--no-ai`) and never fails the install. `doctor.sh --ollama` and
+  `repair.sh` both use the same module.
+- New docs: [docs/AI.md](docs/AI.md) (Ollama/Qwen install & ops),
+  [docs/UBUNTU.md](docs/UBUNTU.md) (Ubuntu Server-specific notes,
+  matching the existing KALI.md/PARROT.md).
+- `.gitleaks.toml` — CI-integrated secret-scan config with an explicit,
+  narrow allowlist for this repo's own known-fake test fixtures (e.g.
+  `AKIAIOSFODNN7REALISH` in a redaction test) — verified `gitleaks
+  detect` clean against the full repo history otherwise.
+
 ## Unreleased — Ollama support, per-phase AI strategy, bulk job deletion, bug fixes
 
 Follow-up pass driven by real usage against live targets (a user ran the

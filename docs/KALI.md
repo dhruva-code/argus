@@ -42,6 +42,10 @@ git clone <repo-url> Argus && cd Argus
 
 Kali already has Python 3.11+, `build-essential`-equivalent tooling, and
 often Go — `install.sh` detects and reuses all of it rather than reinstalling.
+It also installs/configures Ollama + a Qwen model (skip with `--no-ai`) and
+creates the bootstrap admin account automatically — see
+[INSTALL.md](INSTALL.md) and [AI.md](AI.md). There is no setup wizard to
+click through; log in with the printed bootstrap credentials.
 
 ## sudo
 

@@ -57,11 +57,24 @@ async def _project(session, risk=RiskProfile.moderate):
 
 async def test_report_formats(db_session):
     org, p = await _project(db_session)
-    await upsert_finding(db_session, org_id=org.id, project_id=p.id, scan_id=None, data={
-        "fingerprint": "f1", "template_id": "wordpress-db-exposure", "name": "WP DB exposure",
-        "severity": "high", "host": "app.acme.com", "matched_at": "https://app.acme.com/db.sql",
-        "normalized_path": "/db.sql", "cve": [], "level": "safe_verify", "matcher_name": "word",
-    })
+    await upsert_finding(
+        db_session,
+        org_id=org.id,
+        project_id=p.id,
+        scan_id=None,
+        data={
+            "fingerprint": "f1",
+            "template_id": "wordpress-db-exposure",
+            "name": "WP DB exposure",
+            "severity": "high",
+            "host": "app.acme.com",
+            "matched_at": "https://app.acme.com/db.sql",
+            "normalized_path": "/db.sql",
+            "cve": [],
+            "level": "safe_verify",
+            "matcher_name": "word",
+        },
+    )
     await db_session.commit()
 
     for fmt in ("json", "md", "csv", "html"):
@@ -85,20 +98,43 @@ async def test_unified_finding_engine(db_session):
     org, p = await _project(db_session)
     common = {"org_id": org.id, "project_id": p.id, "scan_id": None}
 
-    await upsert_secret(db_session, **common, data={
-        "fingerprint": "s1", "detector_type": "AWSAccessKeyID", "severity": "high",
-        "source_kind": "js", "source": "https://app.acme.com/a.js", "location": "a.js:12",
-        "value": "AKIAIOSFODNN7EXAMPLE",
-    })
-    await upsert_endpoint(db_session, **common, data={
-        "method": "GET", "normalized_url": "app.acme.com/.git/config", "host": "app.acme.com",
-        "path": "/.git/config", "sample_url": "https://app.acme.com/.git/config",
-        "sensitivity": "critical", "sensitivity_reason": "Exposed .git",
-    })
-    await upsert_port(db_session, **common, data={
-        "ip": "203.0.113.9", "port": 6379, "protocol": "tcp", "service": "redis",
-        "hostnames": ["cache.acme.com"],
-    })
+    await upsert_secret(
+        db_session,
+        **common,
+        data={
+            "fingerprint": "s1",
+            "detector_type": "AWSAccessKeyID",
+            "severity": "high",
+            "source_kind": "js",
+            "source": "https://app.acme.com/a.js",
+            "location": "a.js:12",
+            "value": "AKIAIOSFODNN7EXAMPLE",
+        },
+    )
+    await upsert_endpoint(
+        db_session,
+        **common,
+        data={
+            "method": "GET",
+            "normalized_url": "app.acme.com/.git/config",
+            "host": "app.acme.com",
+            "path": "/.git/config",
+            "sample_url": "https://app.acme.com/.git/config",
+            "sensitivity": "critical",
+            "sensitivity_reason": "Exposed .git",
+        },
+    )
+    await upsert_port(
+        db_session,
+        **common,
+        data={
+            "ip": "203.0.113.9",
+            "port": 6379,
+            "protocol": "tcp",
+            "service": "redis",
+            "hostnames": ["cache.acme.com"],
+        },
+    )
     await db_session.commit()
 
     fnds = {f.template_id: f for f in (await db_session.execute(select(Finding))).scalars().all()}
@@ -114,17 +150,41 @@ async def test_exposure_delta(db_session):
 
     org, p = await _project(db_session)
     t0 = datetime.now(UTC) - timedelta(hours=2)
-    prev = ScanJob(org_id=org.id, project_id=p.id, type="recon.scan", status=JobStatus.completed,
-                   params={}, rate_limits={}, finished_at=t0)
-    cur = ScanJob(org_id=org.id, project_id=p.id, type="recon.scan", status=JobStatus.completed,
-                  params={}, rate_limits={}, finished_at=datetime.now(UTC))
+    prev = ScanJob(
+        org_id=org.id,
+        project_id=p.id,
+        type="recon.scan",
+        status=JobStatus.completed,
+        params={},
+        rate_limits={},
+        finished_at=t0,
+    )
+    cur = ScanJob(
+        org_id=org.id,
+        project_id=p.id,
+        type="recon.scan",
+        status=JobStatus.completed,
+        params={},
+        rate_limits={},
+        finished_at=datetime.now(UTC),
+    )
     db_session.add_all([prev, cur])
     await db_session.flush()
 
-    await upsert_finding(db_session, org_id=org.id, project_id=p.id, scan_id=cur.id, data={
-        "fingerprint": "new1", "template_id": "phpinfo-files", "severity": "low",
-        "host": "x.acme.com", "matched_at": "http://x.acme.com/i.php", "normalized_path": "/i.php",
-    })
+    await upsert_finding(
+        db_session,
+        org_id=org.id,
+        project_id=p.id,
+        scan_id=cur.id,
+        data={
+            "fingerprint": "new1",
+            "template_id": "phpinfo-files",
+            "severity": "low",
+            "host": "x.acme.com",
+            "matched_at": "http://x.acme.com/i.php",
+            "normalized_path": "/i.php",
+        },
+    )
     await db_session.commit()
 
     delta = await exposure_delta(db_session, p.id)
@@ -141,10 +201,20 @@ async def test_ai_heuristic_summary(db_session):
 
     org, p = await _project(db_session)
     for i, (sev, host) in enumerate([("critical", "a.com"), ("high", "a.com"), ("low", "b.com")]):
-        await upsert_finding(db_session, org_id=org.id, project_id=p.id, scan_id=None, data={
-            "fingerprint": f"f{i}", "template_id": "t" + str(i % 2), "severity": sev,
-            "host": host, "matched_at": f"http://{host}/", "normalized_path": "/",
-        })
+        await upsert_finding(
+            db_session,
+            org_id=org.id,
+            project_id=p.id,
+            scan_id=None,
+            data={
+                "fingerprint": f"f{i}",
+                "template_id": "t" + str(i % 2),
+                "severity": sev,
+                "host": host,
+                "matched_at": f"http://{host}/",
+                "normalized_path": "/",
+            },
+        )
     await db_session.commit()
     findings = (await db_session.execute(select(Finding))).scalars().all()
     out = await analyse(db_session, org.id, p, findings)

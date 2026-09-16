@@ -28,6 +28,7 @@ a silent fix.
 ```bash
 ./doctor.sh --tools          # security tool versions/health only
 ./doctor.sh --database       # Postgres connectivity + migration state
+./doctor.sh --ollama         # Ollama service, model, real inference test
 ./doctor.sh --network        # default route, DNS, db/redis reachability
 ./doctor.sh --permissions    # ownership/writability of logs/runtime/backups
 ./doctor.sh --performance    # CPU/RAM/disk + per-service cpu/rss snapshot
@@ -75,7 +76,40 @@ manage its own copy at `~/.local/go` (it never touches a working system Go).
 If you're running the backing services via Docker Compose (the default —
 see `make infra`), make sure the containers are up: `docker compose ps`. If
 you switched to a natively-installed Postgres/Redis, `./doctor.sh --fix` will
-try to start them via `systemctl`.
+try to start them via `systemctl`. Neither Docker nor a native install
+available yet? `install.sh`/`run.sh` fall back to a native
+`apt install postgresql`/`redis-server` automatically — you should never
+be left with no database path at all.
+
+### "postgres already reachable" immediately followed by a password-authentication traceback
+
+```
+[OK]   postgres already reachable at localhost:5432
+==> Applying database migrations
+...
+psycopg.OperationalError: ... FATAL:  password authentication failed for user "argus"
+```
+
+This means something is genuinely listening on port 5432, but it rejects
+the credentials currently in `.env` — almost always a **stale Docker
+volume** from an earlier partial/failed install attempt: the official
+Postgres image only applies `POSTGRES_PASSWORD` the first time it
+initializes an *empty* data directory, so a volume created with an older
+password keeps that password forever, even after `.env` changes.
+`db_start`/`run.sh` detect this directly now (real auth check, not just a
+TCP probe) and report it clearly instead of letting it surface here. Fix:
+
+```bash
+./repair.sh --reset-database
+```
+
+**This is destructive** — it recreates the database from `.env`'s current
+credentials, discarding whatever was in it. Back up first
+(`./scripts/backup.sh`) if this instance has real data you need to keep.
+If you'd rather not lose that data, the alternative is finding out what
+password actually *is* baked into the volume (check any earlier `.env`
+backups under `backups/`) and editing `.env` to match it instead of
+resetting.
 
 ### "orchestrator binary not built"
 
@@ -122,6 +156,17 @@ scratch (you'll lose any customization you'd made — back it up first with
 Thresholds live in `config/system.yaml`. At 95% the platform is meant to
 pause new artifact-heavy scans rather than run the disk out entirely —
 findings are never auto-deleted to make room; free space or expand storage.
+
+### Ollama / Qwen not working
+
+```bash
+./doctor.sh --ollama
+```
+
+AI is always optional — every check here failing just means AI analysis
+falls back to the deterministic heuristic; nothing else in Argus is
+affected. See [AI.md](AI.md) for install/model-sizing/inference-timeout
+troubleshooting in depth.
 
 ### A scan job is stuck / a worker looks alive but isn't progressing
 

@@ -7,6 +7,12 @@ Adds `ai_settings.ollama_base_url` (local/self-hosted Ollama server, no API
 key needed) and `ai_settings.analyze_every_phase` (opt-in: ask the
 configured AI for a short bug-hunting strategy note after each recon phase
 checkpoint, stored as a job event).
+
+Column-existence-guarded (see app/_migration_guards.py) — 0001_initial's
+`Base.metadata.create_all()` against current `app/models.py` already
+creates these columns on a database built via the full 0001->head chain
+from empty (any brand-new install); confirmed by actually running that
+chain against a fresh Postgres database.
 """
 
 from __future__ import annotations
@@ -17,6 +23,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
+from app._migration_guards import add_column_if_missing
+
 revision: str = "0013_ollama_and_per_phase_ai"
 down_revision: str | None = "0012_jsonb_contains_filters"
 branch_labels: str | Sequence[str] | None = None
@@ -24,11 +32,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
+    add_column_if_missing(
         "ai_settings",
         sa.Column("ollama_base_url", sa.String(300), nullable=False, server_default="http://localhost:11434"),
     )
-    op.add_column(
+    add_column_if_missing(
         "ai_settings",
         sa.Column("analyze_every_phase", sa.Boolean(), nullable=False, server_default=sa.false()),
     )

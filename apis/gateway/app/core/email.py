@@ -61,7 +61,9 @@ class SMTPProvider(EmailProvider):
 
     def send(self, to: str, subject: str, body_text: str, body_html: str | None = None) -> None:
         if not self.configured():
-            raise EmailSendError("SMTP is not configured (SMTP_HOST is unset) — set it in .env or Admin Settings")
+            raise EmailSendError(
+                "SMTP is not configured (SMTP_HOST is unset) — set it in .env or Admin Settings"
+            )
         msg = EmailMessage()
         msg["From"] = self.from_addr
         msg["To"] = to

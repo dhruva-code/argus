@@ -100,11 +100,7 @@ class NotificationService:
 
         if not force and not prefs.events.get(event_type, False):
             return []
-        if (
-            not force
-            and event_type not in _CRITICAL_EVENTS
-            and _in_quiet_hours(prefs, user.timezone)
-        ):
+        if not force and event_type not in _CRITICAL_EVENTS and _in_quiet_hours(prefs, user.timezone):
             return []
         if (
             not force
@@ -177,7 +173,10 @@ async def _deliver_with_retry(job: dict) -> None:
         except (EmailSendError, telegram.TelegramSendError, ValueError) as exc:
             log.warning(
                 "notification delivery failed (channel=%s attempt=%d/%d): %s",
-                job["channel"], attempt, MAX_ATTEMPTS, exc,
+                job["channel"],
+                attempt,
+                MAX_ATTEMPTS,
+                exc,
             )
             if attempt >= MAX_ATTEMPTS:
                 await _record_status(delivery_id, status="dead_letter", attempts=attempt, error=str(exc))
@@ -230,10 +229,10 @@ async def run_telegram_pairing_poller(stop: asyncio.Event) -> None:
                 continue
             code, chat_id, username = parsed
             async with SessionLocal() as session:
-                link = await session.scalar(
-                    select(TelegramLink).where(TelegramLink.pairing_code == code)
-                )
-                if link is None or (link.pairing_expires and ensure_aware(link.pairing_expires) < datetime.now(UTC)):
+                link = await session.scalar(select(TelegramLink).where(TelegramLink.pairing_code == code))
+                if link is None or (
+                    link.pairing_expires and ensure_aware(link.pairing_expires) < datetime.now(UTC)
+                ):
                     continue
                 link.chat_id = chat_id
                 link.telegram_username = username

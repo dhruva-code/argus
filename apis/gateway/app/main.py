@@ -139,12 +139,29 @@ def create_app() -> FastAPI:
             checks["redis"] = True
         except Exception:  # noqa: BLE001
             checks["redis"] = False
-        checks["configuration"] = bool(settings.jwt_secret) and settings.jwt_secret != "dev-insecure-change-me"  # noqa: S105
+        checks["configuration"] = (
+            bool(settings.jwt_secret) and settings.jwt_secret != "dev-insecure-change-me"  # noqa: S105
+        )
         ok = all(checks.values()) if settings.env == "production" else checks["database"] and checks["redis"]
         return JSONResponse(status_code=200 if ok else 503, content={"ready": ok, "checks": checks})
 
-    for r in (auth, orgs, projects, assets, profiles, jobs, tools, dashboard, audit, reports,
-              metrics, inject, oast, system, settings_router):
+    for r in (
+        auth,
+        orgs,
+        projects,
+        assets,
+        profiles,
+        jobs,
+        tools,
+        dashboard,
+        audit,
+        reports,
+        metrics,
+        inject,
+        oast,
+        system,
+        settings_router,
+    ):
         app.include_router(r.router)
     app.include_router(inject.internal_router)
 

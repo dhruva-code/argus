@@ -141,9 +141,7 @@ async def dashboard(
             Endpoint.sensitivity.in_([Sensitivity.high, Sensitivity.critical]),
         )
     )
-    open_ports = await session.scalar(
-        select(func.count(Port.id)).where(Port.org_id == org_id)
-    )
+    open_ports = await session.scalar(select(func.count(Port.id)).where(Port.org_id == org_id))
     findings_open = await session.scalar(
         select(func.count(Finding.id)).where(
             Finding.org_id == org_id,

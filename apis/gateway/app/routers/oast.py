@@ -50,7 +50,11 @@ async def oast_hit(
     if pid is not None:
         project = await session.get(Project, pid)
         if project is not None:
-            headers = {k: v for k, v in request.headers.items() if k.lower() in ("user-agent", "host", "x-forwarded-for")}
+            headers = {
+                k: v
+                for k, v in request.headers.items()
+                if k.lower() in ("user-agent", "host", "x-forwarded-for")
+            }
             summary = f"{request.method} {request.url.path} {headers}"[:2000]
             session.add(
                 OASTEvent(

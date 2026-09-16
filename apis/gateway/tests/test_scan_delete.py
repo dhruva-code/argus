@@ -47,8 +47,13 @@ async def test_delete_scan_keeps_inventory_by_default(db_session):
     j2 = await _job(db_session, org, p)
     j1_id, j2_id = j1.id, j2.id
     db_session.add(JobEvent(job_id=j1_id, type="log", level="INFO", message="hi", data={}))
-    await upsert_asset(db_session, org_id=org.id, project_id=p.id, scan_id=j1_id,
-                       data={"type": "domain", "value": "a.com", "status": "alive"})
+    await upsert_asset(
+        db_session,
+        org_id=org.id,
+        project_id=p.id,
+        scan_id=j1_id,
+        data={"type": "domain", "value": "a.com", "status": "alive"},
+    )
     await db_session.commit()
 
     res = await delete_scans(db_session, org_id=org.id, jobs=[j1], purge_data=False)
@@ -68,14 +73,34 @@ async def test_delete_scan_with_purge_removes_what_it_introduced(db_session):
     j1 = await _job(db_session, org, p)
     j2 = await _job(db_session, org, p)
     j1_id = j1.id
-    await upsert_asset(db_session, org_id=org.id, project_id=p.id, scan_id=j1_id,
-                       data={"type": "domain", "value": "old.com", "status": "alive"})
-    await upsert_asset(db_session, org_id=org.id, project_id=p.id, scan_id=j2.id,
-                       data={"type": "domain", "value": "new.com", "status": "alive"})
-    await upsert_finding(db_session, org_id=org.id, project_id=p.id, scan_id=j1_id, data={
-        "fingerprint": "fp1", "template_id": "phpinfo-files", "severity": "low",
-        "host": "old.com", "matched_at": "http://old.com/i.php", "normalized_path": "/i.php",
-    })
+    await upsert_asset(
+        db_session,
+        org_id=org.id,
+        project_id=p.id,
+        scan_id=j1_id,
+        data={"type": "domain", "value": "old.com", "status": "alive"},
+    )
+    await upsert_asset(
+        db_session,
+        org_id=org.id,
+        project_id=p.id,
+        scan_id=j2.id,
+        data={"type": "domain", "value": "new.com", "status": "alive"},
+    )
+    await upsert_finding(
+        db_session,
+        org_id=org.id,
+        project_id=p.id,
+        scan_id=j1_id,
+        data={
+            "fingerprint": "fp1",
+            "template_id": "phpinfo-files",
+            "severity": "low",
+            "host": "old.com",
+            "matched_at": "http://old.com/i.php",
+            "normalized_path": "/i.php",
+        },
+    )
     await db_session.commit()
 
     res = await delete_scans(db_session, org_id=org.id, jobs=[j1], purge_data=True)
@@ -98,16 +123,29 @@ async def test_delete_scans_api_skips_running(admin_client):
 
     async with SessionLocal() as s:
         org_id = uuid.UUID(me["active_org"])
-        done = ScanJob(org_id=org_id, project_id=uuid.UUID(pid), type="recon.scan",
-                       status=JobStatus.completed, params={}, rate_limits={})
-        run = ScanJob(org_id=org_id, project_id=uuid.UUID(pid), type="recon.scan",
-                      status=JobStatus.running, params={}, rate_limits={})
+        done = ScanJob(
+            org_id=org_id,
+            project_id=uuid.UUID(pid),
+            type="recon.scan",
+            status=JobStatus.completed,
+            params={},
+            rate_limits={},
+        )
+        run = ScanJob(
+            org_id=org_id,
+            project_id=uuid.UUID(pid),
+            type="recon.scan",
+            status=JobStatus.running,
+            params={},
+            rate_limits={},
+        )
         s.add_all([done, run])
         await s.commit()
         done_id, run_id = str(done.id), str(run.id)
 
     r = await admin_client.request(
-        "POST", f"/api/projects/{pid}/scans/delete",
+        "POST",
+        f"/api/projects/{pid}/scans/delete",
         json={"job_ids": [done_id, run_id]},
     )
     assert r.status_code == 200

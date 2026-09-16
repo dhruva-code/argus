@@ -11,6 +11,12 @@ on first read/write (see app/services settings routers), holding:
   result.
 - report_settings: PDF report branding (company name, logo data URI,
   title, author, contact, confidentiality label, accent color).
+
+Table-existence-guarded (see app/_migration_guards.py) — 0001_initial's
+`Base.metadata.create_all()` against current `app/models.py` already
+creates these tables on a database built via the full 0001->head chain
+from empty (any brand-new install); confirmed by actually running that
+chain against a fresh Postgres database.
 """
 
 from __future__ import annotations
@@ -20,6 +26,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+from app._migration_guards import create_table_if_missing
+
 revision: str = "0011_ai_report_settings"
 down_revision: str | None = "0010_wayback_urls"
 branch_labels: str | Sequence[str] | None = None
@@ -27,7 +35,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.create_table(
+    create_table_if_missing(
         "ai_settings",
         sa.Column("org_id", sa.Uuid(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
@@ -42,12 +50,14 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["org_id"], ["organizations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("org_id"),
     )
-    op.create_table(
+    create_table_if_missing(
         "report_settings",
         sa.Column("org_id", sa.Uuid(), nullable=False),
         sa.Column("company_name", sa.String(200), nullable=False, server_default=""),
         sa.Column("logo_data_uri", sa.String(350_000), nullable=True),
-        sa.Column("report_title", sa.String(200), nullable=False, server_default="Security Assessment Report"),
+        sa.Column(
+            "report_title", sa.String(200), nullable=False, server_default="Security Assessment Report"
+        ),
         sa.Column("author", sa.String(200), nullable=False, server_default=""),
         sa.Column("contact_email", sa.String(300), nullable=False, server_default=""),
         sa.Column("confidentiality_label", sa.String(80), nullable=False, server_default="Confidential"),

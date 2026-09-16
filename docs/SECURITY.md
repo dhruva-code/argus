@@ -2,20 +2,39 @@
 
 ## Supported versions
 
-Argus is currently in **private beta** (`0.9.x`). Only the latest commit on
-`main` in the private repository receives security fixes — there is no
-long-term-support branch yet. Once `1.0.0` ships publicly, this section will
-list which minor versions continue to receive patches.
+Argus (`0.9.x`) is **public** on GitHub. Only the latest commit on `main`
+receives security fixes — there is no long-term-support branch yet.
+
+## This is a public repository — read before you deploy
+
+- **Never commit `.env`, real credentials, API keys, or private keys.**
+  `.gitignore` excludes `.env`/`*.pem`/`*.key`/`*credentials*.json`/etc.
+  by default — don't work around it.
+- **The bootstrap admin credential is public knowledge.**
+  `argus@argus.local` / `argus` is documented in this repository's own
+  README/INSTALL/AUTHENTICATION docs — anyone can read it. It exists so a
+  fresh install has *something* that works out of the box, not as a
+  secret. **Change it immediately after first login** for any deployment
+  reachable by anyone other than you, and set your own
+  `ARGUS_DEFAULT_ADMIN_PASSWORD` in `.env` before running `install.sh` if
+  you don't want the default used even transiently.
+- **Never expose a freshly-installed instance to the internet** before
+  changing that password. Login is rate-limited by source IP
+  (`app/core/ratelimit.py`, 10 failed attempts / 15 minutes) specifically
+  because the account identity here is fixed and public — but rate
+  limiting slows a brute force, it doesn't replace a real password.
+- Run a secret scan (`gitleaks detect --source .`, or see
+  `.gitleaks.toml` for this repo's own CI-integrated config) before
+  pushing if you've been editing `.env.example`, install scripts, or test
+  fixtures that legitimately contain secret-*shaped* strings.
 
 ## Reporting a vulnerability
 
-This repository is currently **private** and under active pre-release
-development. If you have access to it and find a security issue:
-
-- Do not open a public issue anywhere, and do not discuss it outside this
-  repository's own private channels.
-- Report it directly to the repository owner (see the repository's
-  collaborator list / GitHub profile contact).
+- **Do not open a public GitHub issue for a security vulnerability.**
+- Report privately to the repository owner (see the repository's
+  collaborator list / GitHub profile contact) or via GitHub's private
+  vulnerability reporting (Security tab → "Report a vulnerability") if
+  enabled on this repository.
 - Include: affected component, reproduction steps or PoC, impact, and
   whether it's already been exploited against a real target.
 
@@ -74,11 +93,13 @@ command line, anywhere in the codebase.
 |---|---|
 | Passwords | Argon2id (`passlib`) |
 | Sessions | Short-lived JWT access token + rotating refresh token; refresh tokens are single-use and revocable (`refresh_tokens` table) |
+| Login rate limiting | 10 failed attempts / 15 min, keyed by source IP (`app/core/ratelimit.py`, Redis-backed, fails open if Redis is down) — see "public repository" note above for why IP rather than account |
+| Login audit | Every login attempt (success and failure, with reason) writes an `audit_logs` row — `auth.login`/`auth.login_failed` |
 | MFA | Optional TOTP (RFC 6238), enforced at login when enabled |
 | Secrets at rest | Tool API keys encrypted with Fernet (`SECRET_ENCRYPTION_KEY`); never returned by the API, masked in the UI |
 | SQL injection | SQLAlchemy Core/ORM parameterized queries only |
 | Tenancy | `org_id` filter on every query; cross-tenant rows 404 |
-| RBAC | Fixed role→permission matrix, enforced per route |
+| Authorization | Single-role model — every account holds every permission (`app/core/rbac.py`); enforced per route regardless |
 | Transport | Gateway speaks plain HTTP; terminate TLS at a reverse proxy (see INSTALL.md). `--proxy-headers --forwarded-allow-ips` set in the entrypoint |
 | CORS | Locked to `ARGUS_CORS_ORIGINS`; in production the browser only ever talks to the `web` origin, which proxies same-origin `/api` |
 | Audit | Every mutation writes an append-only `audit_logs` row (actor, IP, action, before/after, reason). No UI path updates or deletes them |
@@ -96,9 +117,7 @@ command line, anywhere in the codebase.
   Transit (`VAULT_*`) — see `apis/gateway/app/core/crypto.py`. Neither is
   ever returned by any API response.
 - **User credentials**: passwords are Argon2id-hashed, never stored or
-  logged in plaintext. Email-verification and password-reset tokens are
-  SHA-256-hashed before being stored — the raw token exists only in the
-  one-time email sent to the user (see `docs/AUTHENTICATION.md`).
+  logged in plaintext (see `docs/AUTHENTICATION.md`).
 - **Installer/ops secrets**: `install.sh`/`run.sh`/`doctor.sh` (see
   `scripts/lib/logging.sh`) redact anything that looks like a password,
   token, API key, or `user:pass@host`-shaped URL before writing to
@@ -107,12 +126,8 @@ command line, anywhere in the codebase.
 - **Never commit `.env`** — see `.gitignore` and the pre-push secret scan in
   `CHANGELOG.md` / CI (`.github/workflows/ci.yml`'s `secret-scan` job).
 
-## Known limitations (0.9.0-private)
+## Known limitations (0.9.x)
 
-- No per-IP login/registration throttling yet at the application layer; put
-  the gateway behind a reverse proxy that provides it for any
-  internet-facing deployment (this matters more now that self-registration
-  exists — see docs/AUTHENTICATION.md).
 - The notification-delivery retry queue is in-process (`asyncio`-scheduled
   backoff, not a persisted delayed queue) — a gateway restart mid-retry
   drops that specific pending retry rather than resuming it. See
@@ -120,6 +135,12 @@ command line, anywhere in the codebase.
 - Telegram pairing uses long-polling (`getUpdates`), not a webhook — fine
   for a single-gateway deployment, not appropriate to run from more than one
   gateway replica at once (both would compete for the same updates).
-- "Sign in with Proton" is not offered — see docs/AUTHENTICATION.md for why,
-  and what email-address support (which *is* fully implemented) means
-  instead.
+- Login rate limiting is IP-keyed and Redis-backed (see above) — an
+  attacker behind a large shared NAT/proxy could still exhaust that IP's
+  budget for legitimate users behind the same address. Put the gateway
+  behind a reverse proxy/WAF with its own rate limiting for an
+  internet-facing deployment.
+- There is no built-in mechanism to run multiple bootstrap-admin accounts
+  with different privilege levels — this is by design for the
+  single-operator deployment shape this project targets (see
+  `docs/AUTHENTICATION.md`), not a gap to be filled later.

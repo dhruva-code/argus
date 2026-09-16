@@ -23,8 +23,13 @@ orchestrator/bin/
 # Env / secrets
 .env
 .env.local
+.env.*.local
 *.pem
 *.key
+*.crt
+*.p12
+*credentials*.json
+*.secret
 !.env.example
 
 # Data / artifacts

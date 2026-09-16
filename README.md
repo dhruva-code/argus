@@ -17,7 +17,7 @@ reports.
 
 ---
 
-## Status — Milestones 1–7 (M6 complete, M7 partial — enterprise RBAC deferred)
+## Status — Milestones 1–7 (M6 complete, M7 partial)
 
 **Milestones 2–7** deliver the full 12-phase reconnaissance & scanning pipeline
 (incl. opt-in active injection fuzzing), the finding priority + verification
@@ -77,11 +77,14 @@ evidence; secret values always excluded — see
 [docs/REPORTS.md](docs/REPORTS.md)), **exposure-delta** + **scheduled
 monitoring** with Slack/webhook/email **notifications**, **data-retention**
 enforcement, **scan-history management**, an interactive **attack-surface graph**,
-**program analytics**, optional **AI-assisted analysis** (project summaries and
-per-finding classification/remediation, configured under Settings → AI &
-Analysis — see [docs/AI_ANALYSIS.md](docs/AI_ANALYSIS.md)), `/api/metrics` for
-Prometheus, a **Helm chart** (`deploy/helm/argus`), and an optional **Vault
-Transit** secret backend.
+**program analytics**, optional **AI-assisted analysis** — local (Ollama +
+Qwen, installed automatically) or hosted (Anthropic) — covering project
+summaries, per-phase strategy notes, and automatic findings/secrets
+triage with default-view false-positive suppression (configured under
+Settings → AI & Analysis; see [docs/AI.md](docs/AI.md) for installation
+and [docs/AI_ANALYSIS.md](docs/AI_ANALYSIS.md) for the pipeline),
+`/api/metrics` for Prometheus, a **Helm chart** (`deploy/helm/argus`), and
+an optional **Vault Transit** secret backend.
 
 Every discovery flows through the **Asset Identity Engine** — deduplicated by
 `(project, type, value)`, with source attribution, first/last-seen and
@@ -93,8 +96,8 @@ Milestone 1 delivers the platform spine as a working application:
 
 | Area | M1 deliverable |
 |---|---|
-| Auth | JWT access/refresh, Argon2 password hashing, optional TOTP MFA |
-| RBAC | 6 roles, fine-grained permissions, enforced in API middleware |
+| Auth | Single bootstrap super-admin account, JWT access/refresh, Argon2 password hashing, optional TOTP MFA, IP-based login rate limiting — see [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) |
+| Authorization | Single-role model (every account holds every permission), enforced per route in API middleware regardless |
 | Tenancy | Organization → Project isolation on every query |
 | Projects | Full project model: program metadata, RoE, risk profile, schedule |
 | Scope engine | allow/deny rules — domain, subdomain, wildcard, IPv4/IPv6 CIDR, ASN, URL, regex, port & path scoping. Authoritative Go implementation + mirrored Python implementation, both tested against one shared fixture set. |
@@ -102,7 +105,7 @@ Milestone 1 delivers the platform spine as a working application:
 | Orchestrator | Go service: queue consumer, scope guard, SSRF guard, tool plugin runner, log streaming |
 | Tool manager | Plugin interface, version detection, health checks, enable/disable, encrypted API-key config |
 | Dashboard | Executive dashboard with live cards + charts |
-| Frontend | Next.js app: setup wizard, dashboard, projects, scope editor, tool manager, job viewer with live logs, settings, audit log |
+| Frontend | Next.js app: dashboard, projects, scope editor, tool manager, job viewer with live logs, settings, audit log |
 | CLI | `argus` — same REST API as the web UI |
 | Ops | Docker Compose, Postgres migrations, seed/demo data, OpenAPI docs |
 
@@ -140,37 +143,48 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Quick start
 
-### Native (recommended — Kali Linux, Parrot Security OS, Ubuntu, Debian)
+### Native (recommended — Ubuntu Server, Kali Linux, Parrot Security OS)
 
-`install.sh` detects your distro, installs the required languages/tools, sets
-up Postgres+Redis (via Docker for the backing services, or natively with
-`--production`), generates `.env`, and applies migrations. `run.sh` then
+`install.sh` detects your distro, installs every required language/tool,
+sets up PostgreSQL+Redis (Docker if available, native apt otherwise),
+generates `.env`, applies migrations, creates the bootstrap admin account,
+and installs/configures local AI (Ollama + Qwen). `run.sh` then
 starts/stops the three application processes with proper PID tracking and
-graceful shutdown. `doctor.sh` diagnoses and repairs anything that goes wrong.
+graceful shutdown. `doctor.sh` diagnoses, and `repair.sh` fixes, anything
+that goes wrong; `update.sh` pulls and applies new commits in place.
 
 ```bash
-git clone <repo-url> Argus && cd Argus
+git clone https://github.com/<org>/argus.git Argus && cd Argus
 ./install.sh                  # first-time setup — safe to re-run any time
 ./run.sh                      # start gateway + orchestrator + web
 open http://localhost:3000
 ```
 
-If something isn't working: `./doctor.sh` (add `--fix` for safe automatic
-repair). See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md),
-[docs/KALI.md](docs/KALI.md), and [docs/PARROT.md](docs/PARROT.md).
+Log in with the bootstrap credentials (`argus@argus.local` / `argus` by
+default — **change this immediately**, see
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)). There is no setup
+wizard or self-registration.
+
+If something isn't working: `./doctor.sh --deep` (or `./repair.sh` for
+automatic fixes). See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md),
+[docs/UBUNTU.md](docs/UBUNTU.md), [docs/KALI.md](docs/KALI.md), and
+[docs/PARROT.md](docs/PARROT.md).
 
 ### Docker Compose
 
 ```bash
-git clone <repo-url> Argus && cd Argus
-cp .env.example .env          # generate secrets, review settings
+git clone https://github.com/<org>/argus.git Argus && cd Argus
+cp .env.example .env          # review settings — POSTGRES_PASSWORD/ARGUS_DEFAULT_ADMIN_PASSWORD default to "argus", change for anything but local testing
 make up                       # postgres, redis, minio, gateway, orchestrator, web
-make seed                     # demo org + admin + demo project + demo data
+docker compose exec gateway python -m app.bootstrap_admin   # creates the bootstrap admin
+make seed                     # optional: demo project + demo data
 open http://localhost:3000
 ```
 
-Default demo credentials are printed by `make seed` (and are only created when
-`ARGUS_ALLOW_SEED=true`).
+Bootstrap login is `argus@argus.local` / `ARGUS_DEFAULT_ADMIN_PASSWORD`
+(default `argus`) — see [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
+Demo *project* data (not a demo account) is optionally added by `make seed`
+when `ARGUS_ALLOW_SEED=true`.
 
 For local development without rebuilding containers on every change, see
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
@@ -184,15 +198,18 @@ For local development without rebuilding containers on every change, see
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Services, data model, request flow, scope-engine parity |
 | [SECURITY.md](docs/SECURITY.md) | Threat model, SSRF layer, command-injection prevention, hardening |
 | [INSTALL.md](docs/INSTALL.md) | Native + Docker install, secrets, reverse proxy, backups |
+| [AUTHENTICATION.md](docs/AUTHENTICATION.md) | Bootstrap admin model, sessions, MFA, rate limiting |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | `doctor.sh` usage, common failures and fixes |
+| [UBUNTU.md](docs/UBUNTU.md) | Ubuntu Server-specific install notes |
 | [KALI.md](docs/KALI.md) | Kali Linux-specific install notes |
 | [PARROT.md](docs/PARROT.md) | Parrot Security OS-specific install notes |
-| [UPGRADING.md](docs/UPGRADING.md) | `install.sh --upgrade`, backups, rollback |
+| [UPGRADING.md](docs/UPGRADING.md) | `install.sh --upgrade`, `update.sh`, backups, rollback |
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local dev loop, running tests, code layout |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker Compose, systemd, and Kubernetes deployment |
 | [API.md](docs/API.md) | REST API overview; full schema at `/api/docs` |
 | [WAYBACK.md](docs/WAYBACK.md) | Wayback Machine URL discovery: how it works, scope, limitations |
-| [AI_ANALYSIS.md](docs/AI_ANALYSIS.md) | AI configuration, privacy/redaction behavior, what's sent where |
+| [AI.md](docs/AI.md) | Ollama/Qwen installation, model sizing, health checks |
+| [AI_ANALYSIS.md](docs/AI_ANALYSIS.md) | AI pipeline: what's analyzed, when, privacy/redaction, what's sent where |
 | [REPORTS.md](docs/REPORTS.md) | Report formats, PDF structure, branding, redaction |
 | [ROADMAP.md](docs/ROADMAP.md) | Milestone plan M1–M7 |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Branching, review, plugin authoring |

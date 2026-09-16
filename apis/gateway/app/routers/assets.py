@@ -293,8 +293,10 @@ async def list_endpoints(
     if extension:
         stmt = stmt.where(Endpoint.path.ilike(f"%.{extension.lstrip('.').lower()}"))
     if has_params is not None:
-        stmt = stmt.where(func.json_array_length(Endpoint.params) > 0) if has_params else stmt.where(
-            func.json_array_length(Endpoint.params) == 0
+        stmt = (
+            stmt.where(func.json_array_length(Endpoint.params) > 0)
+            if has_params
+            else stmt.where(func.json_array_length(Endpoint.params) == 0)
         )
     # sensitive paths first
     rows = (
@@ -527,9 +529,7 @@ async def list_ports(
         stmt = stmt.where(Port.ip == ip)
     if service:
         stmt = stmt.where(Port.service == service)
-    rows = (
-        (await session.execute(stmt.order_by(Port.ip, Port.port).limit(2000))).scalars().all()
-    )
+    rows = (await session.execute(stmt.order_by(Port.ip, Port.port).limit(2000))).scalars().all()
     return [PortOut.model_validate(r) for r in rows]
 
 
