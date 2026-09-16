@@ -158,6 +158,13 @@ node_setup
 source "${SCRIPT_DIR}/scripts/env_setup.sh"
 env_setup_run "$INSTALL_PROFILE"
 
+# ── Web production build ─────────────────────────────────────────────────
+# run.sh/services.sh run web with `next start` (production mode), which
+# refuses to serve anything without a prior `next build` — must happen after
+# .env exists (see node_build_web) and before the final validation below,
+# which now checks for it.
+node_build_web
+
 # ── Security tools ───────────────────────────────────────────────────────
 tools_install_all
 

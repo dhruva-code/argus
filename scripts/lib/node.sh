@@ -12,6 +12,11 @@ ARGUS_WEB_LOCKFILE="${ARGUS_WEB_DIR}/package-lock.json"
 ARGUS_WEB_PACKAGE_JSON="${ARGUS_WEB_DIR}/package.json"
 ARGUS_WEB_NODE_MODULES="${ARGUS_WEB_DIR}/node_modules"
 ARGUS_WEB_STAMP="${ARGUS_WEB_NODE_MODULES}/.argus-lockfile.sha256"
+# `next start` (used by services.sh to run web in production mode) refuses to
+# run at all without a prior `next build` — BUILD_ID is the file Next.js
+# itself writes to mark a build complete, so its presence/absence is the
+# ground truth for "is there anything for `next start` to serve".
+ARGUS_WEB_BUILD_ID="${ARGUS_WEB_DIR}/.next/BUILD_ID"
 
 node_installed_version() {
   has_cmd node || { echo ""; return 1; }
@@ -66,6 +71,13 @@ node_check() {
     warn "dependencies not verified yet (no install stamp)"
     return 1
   fi
+
+  if [[ -f "$ARGUS_WEB_BUILD_ID" ]]; then
+    ok "production build present"
+  else
+    fail "no production build (.next/) — 'next start' will fail; run: cd web && npm run build (or ./repair.sh)"
+    return 1
+  fi
   return 0
 }
 
@@ -117,10 +129,48 @@ node_setup() {
   ok "Node dependencies installed"
 }
 
+# node_build_web — `next start` (production mode, what services.sh actually
+# runs web with) refuses to serve anything without a prior `next build`.
+# Idempotent: skipped if a build already exists and dependencies haven't
+# changed since, unless forced (ARGUS_FORCE=1) or the build is simply
+# missing, which is always treated as needing a build regardless of force.
+node_build_web() {
+  if [[ ! -d "$ARGUS_WEB_DIR" || ! -f "$ARGUS_WEB_PACKAGE_JSON" ]]; then
+    return 0
+  fi
+  if [[ -f "$ARGUS_WEB_BUILD_ID" && "$ARGUS_FORCE" != "1" ]]; then
+    ok "web production build already present — skipping rebuild"
+    return 0
+  fi
+  step "Building web production bundle"
+  (
+    cd "$ARGUS_WEB_DIR"
+    _service_env_for_build
+    run_cmd_or_die "npm run build" -- npm run build
+  )
+  [[ -f "$ARGUS_WEB_BUILD_ID" ]] || die "next build completed but .next/BUILD_ID is still missing — see ${ARGUS_LOG_DIR}/install.log"
+  ok "web production build ready"
+}
+
+# Exports NEXT_PUBLIC_* (and anything else in .env) into the build's
+# environment — harmless no-op today (no client code reads a NEXT_PUBLIC_*
+# var yet, see next.config.mjs which reads it at server-runtime instead) but
+# any NEXT_PUBLIC_* var added to client-side code in the future gets baked
+# into the bundle at build time, not runtime, so it needs to be present now.
+_service_env_for_build() {
+  [[ -f "$ARGUS_ENV_FILE" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  source "$ARGUS_ENV_FILE"
+  set +a
+}
+
 node_repair() {
   step "Repairing Node environment"
   if [[ ! -d "$ARGUS_WEB_DIR" ]]; then return 0; fi
   fix "removing node_modules and reinstalling from lockfile"
   rm -rf "$ARGUS_WEB_NODE_MODULES"
   node_setup
+  rm -rf "${ARGUS_WEB_DIR}/.next"
+  node_build_web
 }

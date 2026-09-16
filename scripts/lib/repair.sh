@@ -80,6 +80,11 @@ doctor_repair_all() {
   redis_repair
   [[ -x "$ARGUS_VENV_PY" ]] || python_repair
   [[ -d "${ARGUS_WEB_DIR}/node_modules" ]] || node_repair
+  # Dependencies can be present while the production build is still missing
+  # (e.g. a fresh install that never built, or .next deleted separately) —
+  # `next start` fails outright without it, so check independently of
+  # node_modules rather than only as part of a full node_repair reinstall.
+  [[ -d "${ARGUS_WEB_DIR}/node_modules" && ! -f "$ARGUS_WEB_BUILD_ID" ]] && node_build_web
   tools_repair
   ollama_repair
   repair_stale_pids

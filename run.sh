@@ -72,6 +72,11 @@ cmd_validate_env() {
     return 1
   fi
   ok "Node environment present"
+  if [[ -d "$ARGUS_WEB_DIR" && ! -f "$ARGUS_WEB_BUILD_ID" ]]; then
+    fail "web has no production build (.next/) — 'next start' will fail; run: cd web && npm run build (or ./repair.sh)"
+    return 1
+  fi
+  ok "web production build present"
   if [[ ! -x "${ARGUS_ORCH_DIR}/bin/orchestrator" ]]; then
     warn "orchestrator binary not built — building it now…"
     ( cd "$ARGUS_ORCH_DIR" && go build -o bin/orchestrator ./cmd/orchestrator ) || {
@@ -102,15 +107,23 @@ cmd_start() {
     die "database unreachable — cannot start"
   fi
 
-  services_start_all
+  services_start_all || warn "one or more services failed to start — see the status and log paths below"
 
   sleep 2
   health_quick
   echo ""
   services_status
   echo ""
-  ok "web:       http://localhost:${ARGUS_WEB_PORT:-3000}"
-  ok "api docs:  http://localhost:${ARGUS_API_PORT:-8000}/api/docs"
+  if service_is_running web; then
+    ok "web:       http://localhost:${ARGUS_WEB_PORT:-3000}"
+  else
+    fail "web:       not running — see ${ARGUS_LOG_DIR}/web.log"
+  fi
+  if service_is_running gateway; then
+    ok "api docs:  http://localhost:${ARGUS_API_PORT:-8000}/api/docs"
+  else
+    fail "api docs:  gateway not running — see ${ARGUS_LOG_DIR}/gateway.log"
+  fi
 }
 
 cmd_stop() {
