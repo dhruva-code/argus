@@ -142,13 +142,56 @@ run_cmd_or_die() {
 }
 
 # sudo_run: use sudo only when not already root, and only for the one command.
+#
+# Special-cases a leading "-u <user>" the same way `sudo -u <user> cmd...`
+# does: "run this specific command as <user>", not "run this as root". When
+# already root, `"$@"` can't just be exec'd directly in that case — "-u" is
+# a sudo-specific flag, meaningless as a literal command name (confirmed by
+# a real failure: `sudo_run -u postgres psql ...` invoked from a script
+# already running as root, via `sudo ./repair.sh`, tried to execute a
+# program literally named "-u" and failed with "-u: command not found").
+# runuser (util-linux, present on every Debian/Ubuntu derivative this
+# project supports) is root's direct equivalent of `sudo -u`.
 sudo_run() {
   if [[ "$(id -u)" -eq 0 ]]; then
-    "$@"
+    if [[ "${1:-}" == "-u" ]]; then
+      local target_user="$2"
+      shift 2
+      runuser -u "$target_user" -- "$@"
+    else
+      "$@"
+    fi
   elif has_cmd sudo; then
     sudo "$@"
   else
     die "root privileges required for: $* (sudo not available — re-run as root)"
+  fi
+}
+
+# reject_sudo_wrapper — call once from each top-level script (install.sh,
+# run.sh, doctor.sh, repair.sh, update.sh) right after logging is set up.
+#
+# These scripts already self-elevate only the specific commands that need
+# root (sudo_run, above) — running the *whole* script via `sudo` is never
+# required and actively breaks things: $HOME silently becomes /root, which
+# moves every ~/.local-scoped path this project uses (ARGUS_TOOLS_BIN_DIR,
+# the managed Go install, and — the specific failure this was written for
+# — Docker's own per-user context under ~/.docker) out from under the
+# account that actually set them up. A real run reproduced exactly this:
+# `sudo ./repair.sh --reset-database` couldn't find Docker at all and fell
+# through to a broken native-Postgres path instead.
+#
+# Only refuses the *sudo-elevated-from-a-regular-user* case ($SUDO_USER
+# set) — a box where the login account genuinely is root (common on
+# minimal cloud VM images, no sudo involved at all) is left alone.
+reject_sudo_wrapper() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    fail "don't run this with sudo — it already elevates only the specific commands that need root."
+    fail "running the whole script as root via sudo changes \$HOME from ${SUDO_USER}'s to /root's, which moves"
+    fail "every ~/.local-scoped path this project uses (installed tools, the managed Go toolchain, Docker's"
+    fail "own per-user context) out from under the account that actually set them up — this is exactly what"
+    fail "caused a real 'Docker not detected, fell back to a broken native Postgres path' failure."
+    die "re-run as: ${SUDO_USER}\$ $0 $* (no sudo — you'll be prompted for a password only for the specific steps that need it)"
   fi
 }
 

@@ -20,6 +20,7 @@ LOG_TARGET=doctor
 # shellcheck source=scripts/lib/logging.sh
 source "${ARGUS_LIB_DIR}/logging.sh"
 log_init doctor
+reject_sudo_wrapper "$@"
 # shellcheck source=scripts/lib/diagnostics.sh
 source "${ARGUS_LIB_DIR}/diagnostics.sh"
 # shellcheck source=scripts/lib/repair.sh

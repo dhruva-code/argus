@@ -25,6 +25,7 @@ LOG_TARGET=install
 # shellcheck source=scripts/lib/logging.sh
 source "${ARGUS_LIB_DIR}/logging.sh"
 log_init install
+reject_sudo_wrapper "$@"
 
 trap 'log_error "install.sh" "unhandled" "aborted at line $LINENO" "unknown"; fail "install.sh aborted — see logs/install.log"' ERR
 trap 'true' EXIT

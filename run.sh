@@ -21,6 +21,7 @@ LOG_TARGET=runtime
 # shellcheck source=scripts/lib/logging.sh
 source "${ARGUS_LIB_DIR}/logging.sh"
 log_init runtime
+reject_sudo_wrapper "$@"
 
 for arg in "$@"; do
   case "$arg" in

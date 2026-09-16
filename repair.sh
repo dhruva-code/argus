@@ -27,6 +27,7 @@ LOG_TARGET=repair
 # shellcheck source=scripts/lib/logging.sh
 source "${ARGUS_LIB_DIR}/logging.sh"
 log_init repair
+reject_sudo_wrapper "$@"
 
 RESET_DATABASE=0
 RESET_REDIS=0

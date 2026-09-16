@@ -23,6 +23,7 @@ LOG_TARGET=update
 # shellcheck source=scripts/lib/logging.sh
 source "${ARGUS_LIB_DIR}/logging.sh"
 log_init update
+reject_sudo_wrapper "$@"
 
 MODE="update"
 DO_RESTART=1
