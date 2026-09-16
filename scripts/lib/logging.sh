@@ -50,8 +50,18 @@ redact_secrets() {
 log_init() {
   local target="${1:-$LOG_TARGET}"
   local f; f="$(_log_file_for "$target")"
-  mkdir -p "$(dirname "$f")"
-  : >>"$f"
+  # File logging is a diagnostic nicety, not something the rest of the tool
+  # depends on (every writer below already tolerates a failed write) — but
+  # this init step itself used to have no such tolerance, so a log file
+  # left root-owned by an earlier (now-refused, see reject_sudo_wrapper)
+  # sudo-wrapped run made the *entire* script unusable, including the
+  # repair tooling meant to fix exactly that kind of problem. Degrade to
+  # "no file logging this run" instead of aborting.
+  if ! { mkdir -p "$(dirname "$f")" && : >>"$f"; } 2>/dev/null; then
+    echo "[WARN] can't write to ${f} (permission denied?) — continuing without file logging this run." >&2
+    echo "[WARN] fix: sudo chown -R \$(id -un):\$(id -gn) \"${ARGUS_LOG_DIR}\"" >&2
+    return 0
+  fi
   # Rotate if a log has grown past 10MB — keep one previous copy.
   local size=0
   if [[ -f "$f" ]]; then size="$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)"; fi

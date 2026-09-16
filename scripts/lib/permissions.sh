@@ -52,11 +52,28 @@ permissions_repair() {
   step "Repairing permissions"
   local d
   for d in "${ARGUS_OWNED_DIRS[@]}"; do
-    mkdir -p "$d"
+    mkdir -p "$d" 2>/dev/null || true
     if [[ "$(id -u)" -eq 0 || -O "$d" ]]; then
       chmod u+rwX "$d" 2>/dev/null && fix "restored permissions on $d" || true
     else
-      warn "$d is owned by another user — not touching it (run as that user, or chown it yourself)"
+      # Not ours — almost always one of this project's own directories
+      # (logs/, runtime/, backups/) left root-owned by an earlier
+      # accidental `sudo ./install.sh`-style invocation (now refused
+      # outright — see reject_sudo_wrapper in common.sh), not genuinely
+      # someone else's data. Safe to reclaim with one narrowly-scoped,
+      # per-command sudo elevation — the same mechanism every other
+      # privileged step in this installer already uses — rather than
+      # leaving the operator stuck with no self-service fix.
+      if has_cmd sudo; then
+        fix "$d is owned by another user — reclaiming it for $(id -un) (you may be prompted for your password)"
+        if sudo_run chown -R "$(id -u):$(id -g)" "$d" 2>/dev/null; then
+          chmod u+rwX "$d" 2>/dev/null && fix "restored permissions on $d" || true
+        else
+          warn "$d: could not reclaim ownership — chown it yourself: sudo chown -R $(id -un):$(id -gn) \"$d\""
+        fi
+      else
+        warn "$d is owned by another user — not touching it (chown it yourself: sudo chown -R $(id -un):$(id -gn) \"$d\")"
+      fi
     fi
   done
   if [[ -f "$ARGUS_ENV_FILE" ]]; then

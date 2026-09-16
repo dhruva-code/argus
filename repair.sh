@@ -79,6 +79,17 @@ source "${ARGUS_LIB_DIR}/repair.sh"
 
 echo "${C_BOLD}Argus repair${C_RESET}"
 
+# Always reclaim ownership of this project's own logs/runtime/backups
+# directories first, unconditionally — a permissions problem there (almost
+# always leftover root-ownership from an earlier accidental sudo-wrapped
+# run, now refused outright — see reject_sudo_wrapper) blocks everything
+# downstream: the database-reset path below needs to write a backup, and
+# every step in this script needs to write its own log. Fixing it only in
+# the default (no-flags) safe-repair pass, after the reset branches, was a
+# real gap — a broken permission state is exactly the kind of prerequisite
+# a --reset-database run needs fixed *first*, not last.
+permissions_repair
+
 if [[ "$RESET_DATABASE" == "1" ]]; then
   section "RESET DATABASE (DESTRUCTIVE)"
   warn "this deletes all data currently stored in Postgres (projects, scans, findings, secrets, everything) and recreates it from .env's current credentials."
