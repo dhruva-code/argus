@@ -82,6 +82,8 @@ if [[ "$RESET_DATABASE" == "1" ]]; then
   section "RESET DATABASE (DESTRUCTIVE)"
   warn "this deletes all data currently stored in Postgres (projects, scans, findings, secrets, everything) and recreates it from .env's current credentials."
   if confirm "Really reset the database?" n; then
+    step "Backing up before the reset"
+    "${SCRIPT_DIR}/scripts/backup.sh" || warn "backup step failed — continuing anyway (the whole point of this reset is that the current database is broken; see docs/TROUBLESHOOTING.md to back up manually first if that's not the case for you)"
     db_reset_database || die "database reset failed — see ${ARGUS_LOG_DIR}/repair.log"
     db_migrate || die "reset succeeded but migrations failed — see ${ARGUS_LOG_DIR}/repair.log"
     ok "database reset and migrated"
